@@ -1,6 +1,6 @@
 # Cloud Document Suite
 
-Import, preview, create, edit, and export office documents and mind maps in SiYuan. The current release targets SiYuan Desktop on Windows.
+Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels.
 
 ![Feature preview](preview.png)
 
@@ -16,6 +16,8 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 - Collision-safe naming and sequential multi-file imports; one failed file does not stop the remaining queue.
 
 Legacy `.doc` files and web-link previews are not supported yet.
+
+For NAS Docker deployments, open SiYuan in a desktop browser. Files are uploaded from the current computer into the SiYuan workspace on the NAS. Mobile browser frontends are not supported yet.
 
 ## Install and develop
 
