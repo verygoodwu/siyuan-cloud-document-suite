@@ -345,8 +345,10 @@ try {
     try {
       setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
       const bytes = new TextEncoder().encode(serializeMm(mind));
-      await store.save(bytes, { force });
-      setStatus(`已写入思源 ${new Date().toLocaleTimeString()}`);
+      const saved = await store.save(bytes, { force });
+      setStatus(saved.syncMarked
+        ? `已写入并加入同步 ${new Date().toLocaleTimeString()}`
+        : `附件已保存；未找到文档同步标记 ${new Date().toLocaleTimeString()}`);
     } catch (error) {
       console.error(error);
       if (error instanceof SaveConflictError) {

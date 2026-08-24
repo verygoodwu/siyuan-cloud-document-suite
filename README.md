@@ -1,6 +1,6 @@
 # Cloud Document Suite
 
-Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Excel and FreeMind edits are written back to SiYuan assets for sync; local browser storage is used only for recovery.
+Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Excel and FreeMind edits are written back to SiYuan assets and update a document sync revision marker; local browser storage is used only for recovery.
 
 ![Feature preview](preview.png)
 

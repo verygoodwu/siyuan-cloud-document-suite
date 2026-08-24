@@ -40,6 +40,38 @@ export class SiyuanFileStore {
     this.conflicted = false;
   }
 
+  findHostBlockId() {
+    try {
+      const explicit = new URL(location.href).searchParams.get("block");
+      if (explicit) return explicit;
+      return window.frameElement
+        ?.closest?.("[data-node-id]")
+        ?.getAttribute("data-node-id") || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async markForSync(hash) {
+    const blockId = this.findHostBlockId();
+    if (!blockId) return false;
+    const response = await fetch("/api/attr/setBlockAttrs", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: blockId,
+        attrs: {
+          "custom-cloud-document-revision": `${Date.now()}-${hash.slice(0, 16)}`
+        }
+      })
+    });
+    if (!response.ok) throw new Error(`写入同步标记失败：HTTP ${response.status}`);
+    const result = await response.json();
+    if (result.code !== 0) throw new Error(result.msg || `写入同步标记失败：${result.code}`);
+    return true;
+  }
+
   async fetchRemote() {
     const response = await fetch(cacheBusted(this.asset), {
       cache: "no-store",
@@ -87,10 +119,11 @@ export class SiyuanFileStore {
     const currentHash = await sha256(current);
 
     if (currentHash === desiredHash) {
+      const syncMarked = await this.markForSync(desiredHash);
       this.baseHash = desiredHash;
       this.conflicted = false;
       this.clearRecovery();
-      return { unchanged: true, hash: desiredHash };
+      return { unchanged: true, hash: desiredHash, syncMarked };
     }
     if (!force && this.baseHash && currentHash !== this.baseHash) {
       this.conflicted = true;
@@ -111,9 +144,11 @@ export class SiyuanFileStore {
     const result = await response.json();
     if (result.code !== 0) throw new Error(result.msg || `写入思源失败：${result.code}`);
 
+    const syncMarked = await this.markForSync(desiredHash);
+
     this.baseHash = desiredHash;
     this.conflicted = false;
     this.clearRecovery();
-    return { unchanged: false, hash: desiredHash };
+    return { unchanged: false, hash: desiredHash, syncMarked };
   }
 }

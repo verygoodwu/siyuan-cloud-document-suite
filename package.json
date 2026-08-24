@@ -1,6 +1,6 @@
 {
   "name": "siyuan-cloud-document-suite",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "description": "Cloud Document Suite for importing, editing, previewing, and exporting documents in SiYuan.",
   "packageManager": "pnpm@11.19.0",
