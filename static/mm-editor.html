@@ -6,10 +6,12 @@
   <link rel="stylesheet" href="./MindElixir.css?v=__PLUGIN_VERSION__">
   <style>
     html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
-    #status,#help,#export{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
+    #status,#help,#save,#export{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
     #status{right:12px;bottom:10px}
     #help{left:12px;top:10px;pointer-events:none}
-    #export{right:12px;top:10px;border:0;cursor:pointer;color:#fff;background:#3f73f1}
+    #save,#export{top:10px;border:0;cursor:pointer}
+    #save{right:92px;color:#fff;background:#3f73f1}
+    #export{right:12px;color:#3f73f1;background:#fff}
     #node-tools{position:fixed;z-index:30;left:50%;bottom:18px;transform:translateX(-50%);display:none;align-items:center;gap:5px;padding:7px;background:#25272b;border-radius:8px;box-shadow:0 5px 18px #0004}
     #node-tools button{min-width:30px;height:30px;padding:0 8px;border:0;border-radius:5px;background:transparent;color:#fff;cursor:pointer;font:14px system-ui}
     #node-tools button:hover,#node-tools button.active{background:#ffffff24}
@@ -24,6 +26,7 @@
 <body>
   <div id="map"></div>
   <div id="help">Tab/＋：向右添加子节点　·　根节点按 Shift+Tab：向左添加　·　拖节点：调整位置　·　双击：编辑</div>
+  <button id="save" type="button">保存到思源</button>
   <button id="export" type="button">导出 .mm</button>
   <div id="node-tools" aria-label="节点格式工具栏">
     <button type="button" data-action="bold" title="加粗"><b>B</b></button>

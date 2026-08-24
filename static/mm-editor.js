@@ -1,12 +1,17 @@
 import MindElixir from "./MindElixir.js";
+import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
 
 const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
 const status = document.querySelector("#status");
+const saveButton = document.querySelector("#save");
 const exportButton = document.querySelector("#export");
 const nodeTools = document.querySelector("#node-tools");
 const storageKey = `siyuan-mm-editor:${asset}`;
+const store = new SiyuanFileStore(asset, storageKey);
 let saveTimer;
+let saveInFlight = false;
+let saveAgain = false;
 let nativeAddChild;
 
 const zhCnMenu = {
@@ -203,9 +208,14 @@ async function applyToolbarAction(mind, button) {
   await mind.reshapeNode(topic, patch);
 }
 
+function serializeMm(mind) {
+  const data = mind.getData();
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1">${exportNode(data.nodeData, true)}</map>`;
+}
+
 function downloadMm(mind) {
   const data = mind.getData();
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1">${exportNode(data.nodeData, true)}</map>`;
+  const xml = serializeMm(mind);
   const blobUrl = URL.createObjectURL(new Blob([xml], { type: "application/xml;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = blobUrl;
@@ -215,13 +225,8 @@ function downloadMm(mind) {
   setStatus("已导出 .mm");
 }
 
-async function loadInitialData() {
-  const saved = localStorage.getItem(storageKey);
-  if (saved) return JSON.parse(saved);
-  if (!asset) throw new Error("缺少 .mm 附件路径");
-  const response = await fetch(asset);
-  if (!response.ok) throw new Error(`读取 .mm 失败：HTTP ${response.status}`);
-  const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
+function parseMm(bytes) {
+  const xml = new DOMParser().parseFromString(new TextDecoder().decode(bytes), "application/xml");
   if (xml.querySelector("parsererror")) throw new Error(".mm XML 格式无效");
   const root = Array.from(xml.documentElement.children)
     .find((child) => child.localName.toLowerCase() === "node");
@@ -229,8 +234,25 @@ async function loadInitialData() {
   return { nodeData: convertNode(root, 1, true), direction: 2 };
 }
 
+async function loadInitialData() {
+  const remoteData = parseMm(await store.loadRemote());
+  const recovery = store.readRecovery();
+  if (!recovery) return { value: remoteData, state: "remote" };
+  if (recovery.legacy) {
+    if (confirm("检测到旧版本保存在本机的脑图修改。是否立即写入思源附件并参与同步？")) {
+      return { value: recovery.payload, state: "legacy-recovery" };
+    }
+    return { value: remoteData, state: "legacy-kept" };
+  }
+  if (recovery.baseHash === store.baseHash) {
+    return { value: recovery.payload, state: "recovery" };
+  }
+  store.conflicted = true;
+  return { value: recovery.payload, state: "conflict" };
+}
+
 try {
-  const data = await loadInitialData();
+  const { value: data, state: initialState } = await loadInitialData();
   const mind = new MindElixir({
     el: "#map",
     direction: 2,
@@ -294,11 +316,14 @@ try {
   setTimeout(fitMap, 300);
   mind.bus.addListener("operation", () => {
     clearTimeout(saveTimer);
-    setStatus("正在保存…");
-    saveTimer = setTimeout(() => {
-      localStorage.setItem(storageKey, JSON.stringify(mind.getData()));
-      setStatus(`已自动保存 ${new Date().toLocaleTimeString()}`);
-    }, 350);
+    try {
+      store.cacheRecovery(mind.getData());
+      setStatus("正在写入思源…");
+    } catch (error) {
+      console.error(error);
+      setStatus("本机恢复缓存失败：数据过大");
+    }
+    saveTimer = setTimeout(() => void persistMind(false), 700);
     requestAnimationFrame(() => decorateNodes(mind));
   });
   mind.bus.addListener("selectNodes", () => updateToolbar(mind));
@@ -311,8 +336,51 @@ try {
   const observer = new MutationObserver(() => decorateNodes(mind));
   observer.observe(document.querySelector("#map"), { childList: true, subtree: true });
   decorateNodes(mind);
+  async function persistMind(force) {
+    if (saveInFlight) {
+      saveAgain = true;
+      return;
+    }
+    saveInFlight = true;
+    try {
+      setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
+      const bytes = new TextEncoder().encode(serializeMm(mind));
+      await store.save(bytes, { force });
+      setStatus(`已写入思源 ${new Date().toLocaleTimeString()}`);
+    } catch (error) {
+      console.error(error);
+      if (error instanceof SaveConflictError) {
+        setStatus("保存冲突：思源附件已有新版本，本机修改已保留");
+      } else {
+        setStatus(`保存失败（本机修改已保留）：${error instanceof Error ? error.message : String(error)}`);
+      }
+    } finally {
+      saveInFlight = false;
+      if (saveAgain) {
+        saveAgain = false;
+        void persistMind(false);
+      }
+    }
+  }
+  saveButton.addEventListener("click", () => {
+    if (store.conflicted) {
+      if (confirm("思源附件已在其他页面或设备发生变化。确定用当前脑图覆盖远端版本吗？")) void persistMind(true);
+    } else {
+      void persistMind(false);
+    }
+  });
   exportButton.addEventListener("click", () => downloadMm(mind));
-  setStatus("可编辑 · 自动保存");
+  if (initialState === "conflict") {
+    setStatus("检测到跨设备保存冲突：当前显示本机恢复内容，尚未覆盖思源");
+  } else if (initialState === "legacy-kept") {
+    setStatus("已读取思源附件；旧版本机缓存仍保留");
+  } else if (initialState === "legacy-recovery" || initialState === "recovery") {
+    setStatus("检测到未写入的本机修改，正在恢复到思源…");
+    store.cacheRecovery(mind.getData());
+    void persistMind(false);
+  } else {
+    setStatus("可编辑 · 修改将自动写入思源");
+  }
 } catch (error) {
   console.error(error);
   setStatus(error instanceof Error ? error.message : String(error));

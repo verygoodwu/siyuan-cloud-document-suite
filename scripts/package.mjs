@@ -22,6 +22,7 @@ await Promise.all([
   ,copyFile("node_modules/mind-elixir/dist/MindElixir.css", "dist/MindElixir.css")
   ,copyVersionedHtml("static/sheet-editor.html", "dist/sheet-editor.html")
   ,copyFile("static/sheet-editor.js", "dist/sheet-editor.js")
+  ,copyFile("static/siyuan-file-store.js", "dist/siyuan-file-store.js")
   ,copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
 ]);
 

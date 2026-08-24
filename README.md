@@ -1,6 +1,6 @@
 # Cloud Document Suite
 
-Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels.
+Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Excel and FreeMind edits are written back to SiYuan assets for sync; local browser storage is used only for recovery.
 
 ![Feature preview](preview.png)
 
@@ -8,10 +8,10 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 - Drag files from Windows Explorer onto a document or notebook in the document tree. The plugin uploads the source file and creates a same-named child document.
 - Inline PDF preview with the original attachment retained.
-- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, autosave, and `.xlsx` export.
+- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, automatic SiYuan asset persistence, and `.xlsx` export.
 - `.docx` content conversion with the original attachment retained, plus a context-menu action for creating Word documents.
 - XMind import for both modern `content.json` and legacy `content.xml` packages.
-- Live FreeMind/Freeplane `.mm` editing with draggable nodes, autosave, and standards-compatible `.mm` export.
+- Live FreeMind/Freeplane `.mm` editing with draggable nodes, automatic SiYuan asset persistence, and standards-compatible `.mm` export.
 - Context-menu actions on documents and notebooks for creating mind maps, Word documents, and Excel workbooks.
 - Collision-safe naming and sequential multi-file imports; one failed file does not stop the remaining queue.
 
@@ -33,6 +33,12 @@ The build creates both `dist/` and a marketplace-ready `package.zip`.
 ## Privacy
 
 Document parsing and editing happen locally. The plugin does not intentionally send files to third-party services; attachments stay in the current SiYuan workspace.
+
+## Feature requests and bug reports
+
+If you would like to request a feature or report a problem, please email [wujiaqi8868@gamil.com](mailto:wujiaqi8868@gamil.com). I will review the request and decide whether it fits Cloud Document Suite based on its usefulness, implementation cost, and the overall direction of the plugin.
+
+Cloud Document Suite is under active development. I am gradually adding more features and fixing reported bugs. Feedback and suggestions from users and fellow developers are always welcome.
 
 ## License
 
