@@ -30,6 +30,21 @@ test("pure JavaScript SHA-256 fallback matches standard vectors", async () => {
   );
 });
 
+test("encoded traversal cannot escape the assets directory", () => {
+  const restoreLocation = replaceGlobal(
+    "location",
+    new URL("http://127.0.0.1:6806/plugins/siyuan-cloud-document-suite/mm-editor.html")
+  );
+  try {
+    assert.throws(
+      () => new SiyuanFileStore("/assets/dir%2F..%2F..%2Fconf.json", "recovery:path"),
+      /仅允许保存思源 assets/
+    );
+  } finally {
+    restoreLocation();
+  }
+});
+
 test("a completed putFile remains successful when the optional sync marker fails", async (context) => {
   const storage = new Map();
   const restores = [
@@ -149,11 +164,12 @@ test("an older in-flight save does not clear a newer recovery snapshot", async (
 });
 
 test("editor sources keep automatic save and readable borderless layouts", async () => {
-  const [sheetHtml, sheetScript, mindHtml, mindScript] = await Promise.all([
+  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource] = await Promise.all([
     readFile(new URL("../static/sheet-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/sheet-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.html", import.meta.url), "utf8"),
-    readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8")
+    readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/index.ts", import.meta.url), "utf8")
   ]);
 
   assert.doesNotMatch(sheetHtml, /id="save"/);
@@ -161,9 +177,17 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetHtml, /table\{[^}]*border:0/);
   assert.match(sheetHtml, /th,td\{[^}]*border-right:1px solid #e4e7ec[^}]*border-bottom:1px solid #e4e7ec/);
   assert.match(mindHtml, /#help\{left:72px;right:96px/);
+  assert.match(mindHtml, /#map \.map-container\{background:#fff!important\}/);
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.doesNotMatch(mindScript, /querySelector\("#save"\)/);
   assert.match(sheetScript, /wrapper\.scrollTop = 0/);
   assert.match(sheetScript, /setTimeout\(\(\) => void persist\(false\), 700\)/);
   assert.match(mindScript, /setTimeout\(\(\) => void persistMind\(false\), 700\)/);
+  assert.match(pluginSource, /refreshCloudDocumentEmbeds/);
+  assert.match(pluginSource, /searchParams\.set\("v", PLUGIN_VERSION\)/);
+  assert.match(pluginSource, /fitCloudDocumentEmbeds/);
+  assert.match(pluginSource, /mutationsAffectCloudDocument\(records\)/);
+  assert.match(pluginSource, /this\.refreshCloudDocumentEmbeds\(\);\s*this\.fitCloudDocumentEmbeds\(\);/);
+  assert.match(pluginSource, /--cloud-document-inline-extra/);
+  assert.match(pluginSource, /contentRect\.bottom - blockRect\.top/);
 });

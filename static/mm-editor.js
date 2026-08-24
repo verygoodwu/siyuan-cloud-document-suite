@@ -12,6 +12,7 @@ let saveTimer;
 let saveInFlight = false;
 let saveAgain = false;
 let nativeAddChild;
+let sourceDocument;
 
 const zhCnMenu = {
   addChild: "添加子节点",
@@ -110,36 +111,63 @@ function convertNode(element, inheritedDirection = 1, root = false) {
   };
 }
 
-function escapeXml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function setAttribute(element, name, value) {
+  if (value === undefined || value === null || value === "") element.removeAttribute(name);
+  else element.setAttribute(name, String(value));
 }
 
-function exportNode(node, root = false) {
-  const attributes = [
-    `ID="${escapeXml(node.id)}"`,
-    `TEXT="${escapeXml(node.topic || "未命名主题")}"`
-  ];
-  if (!root) attributes.push(`POSITION="${node.direction === 0 ? "left" : "right"}"`);
-  if (node.expanded === false) attributes.push('FOLDED="true"');
-  if (node.style?.color) attributes.push(`COLOR="${escapeXml(node.style.color)}"`);
-  if (node.style?.background) attributes.push(`BACKGROUND_COLOR="${escapeXml(node.style.background)}"`);
-  if (node.style?.textDecoration?.includes("underline")) attributes.push('CLOUD_UNDERLINE="true"');
+function buildPreservedNode(documentNode, sourceById, node, root = false) {
+  const source = sourceById.get(String(node.id));
+  const element = source
+    ? source.cloneNode(true)
+    : documentNode.createElement("node");
+  for (const child of Array.from(element.children)) {
+    if (child.localName.toLowerCase() === "node") child.remove();
+  }
+
+  setAttribute(element, "ID", node.id || `mm-${createRandomId()}`);
+  setAttribute(element, "TEXT", node.topic || "未命名主题");
+  setAttribute(element, "POSITION", root ? null : node.direction === 0 ? "left" : "right");
+  setAttribute(element, "FOLDED", node.expanded === false ? "true" : null);
+  setAttribute(element, "COLOR", node.style?.color || null);
+  setAttribute(element, "BACKGROUND_COLOR", node.style?.background || null);
+  setAttribute(
+    element,
+    "CLOUD_UNDERLINE",
+    node.style?.textDecoration?.includes("underline") ? "true" : null
+  );
+
   const task = node.metadata?.task;
-  if (task?.enabled) attributes.push(`CLOUD_TASK="${task.done ? "done" : "todo"}"`);
-  const fontAttributes = [];
-  if (node.style?.fontWeight === "700" || node.style?.fontWeight === "bold") fontAttributes.push('BOLD="true"');
-  if (node.style?.fontStyle === "italic") fontAttributes.push('ITALIC="true"');
-  const font = fontAttributes.length ? `<font ${fontAttributes.join(" ")}/>` : "";
-  const taskIcon = task?.enabled ? `<icon BUILTIN="${task.done ? "button_ok" : "unchecked"}"/>` : "";
-  const children = (node.children || []).map((child) => exportNode(child)).join("");
-  const content = `${font}${taskIcon}${children}`;
-  return content.length
-    ? `<node ${attributes.join(" ")}>${content}</node>`
-    : `<node ${attributes.join(" ")}/>`;
+  setAttribute(element, "CLOUD_TASK", task?.enabled ? (task.done ? "done" : "todo") : null);
+
+  let font = directChild(element, "font");
+  const bold = node.style?.fontWeight === "700" || node.style?.fontWeight === "bold";
+  const italic = node.style?.fontStyle === "italic";
+  if ((bold || italic) && !font) {
+    font = documentNode.createElement("font");
+    element.insertBefore(font, element.firstChild);
+  }
+  if (font) {
+    setAttribute(font, "BOLD", bold ? "true" : null);
+    setAttribute(font, "ITALIC", italic ? "true" : null);
+    if (font.attributes.length === 0 && !font.children.length) font.remove();
+  }
+
+  for (const icon of Array.from(element.children).filter(
+    (child) => child.localName.toLowerCase() === "icon"
+  )) {
+    const builtin = icon.getAttribute("BUILTIN")?.toLowerCase();
+    if (builtin === "button_ok" || builtin === "unchecked") icon.remove();
+  }
+  if (task?.enabled) {
+    const taskIcon = documentNode.createElement("icon");
+    taskIcon.setAttribute("BUILTIN", task.done ? "button_ok" : "unchecked");
+    element.appendChild(taskIcon);
+  }
+  for (const child of node.children || []) {
+    element.appendChild(buildPreservedNode(documentNode, sourceById, child));
+  }
+  return element;
 }
 
 function updateToolbar(mind) {
@@ -225,7 +253,24 @@ async function applyToolbarAction(mind, button) {
 
 function serializeMm(mind) {
   const data = mind.getData();
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1">${exportNode(data.nodeData, true)}</map>`;
+  const documentNode = sourceDocument
+    ? sourceDocument.cloneNode(true)
+    : new DOMParser().parseFromString('<map version="1.0.1"/>', "application/xml");
+  const map = documentNode.documentElement;
+  const sourceById = new Map(
+    Array.from(map.getElementsByTagName("node"))
+      .filter((element) => element.getAttribute("ID"))
+      .map((element) => [element.getAttribute("ID"), element])
+  );
+  for (const child of Array.from(map.children)) {
+    if (child.localName.toLowerCase() === "node") child.remove();
+  }
+  map.appendChild(buildPreservedNode(documentNode, sourceById, data.nodeData, true));
+  const body = new XMLSerializer().serializeToString(documentNode)
+    .replace(/^<\?xml[^>]*>\s*/i, "");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${body}`;
+  sourceDocument = new DOMParser().parseFromString(xml, "application/xml");
+  return xml;
 }
 
 function downloadMm(mind) {
@@ -246,6 +291,7 @@ function parseMm(bytes) {
   const root = Array.from(xml.documentElement.children)
     .find((child) => child.localName.toLowerCase() === "node");
   if (!root) throw new Error("未找到脑图根节点");
+  sourceDocument = xml;
   return { nodeData: convertNode(root, 1, true), direction: 2 };
 }
 

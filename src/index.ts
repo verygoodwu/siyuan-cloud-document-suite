@@ -43,7 +43,11 @@ const EMBED_RESET_CSS = `
   background: transparent !important;
 }
 .protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_EDITOR_IFRAME}) {
-  height: clamp(480px, calc(100vh - 200px), 720px) !important;
+  width: calc(100% + var(--cloud-document-inline-extra, 0px)) !important;
+  max-width: none !important;
+  margin-left: var(--cloud-document-inline-start, 0px) !important;
+  margin-right: 0 !important;
+  height: var(--cloud-document-editor-height, clamp(480px, calc(100vh - 200px), 720px)) !important;
   min-height: 480px !important;
   padding: 0 !important;
 }
@@ -97,7 +101,10 @@ class DropImporterPlugin extends Plugin {
   private toastTimer: number | null = null;
   private boundTrees = new Set<HTMLElement>();
   private treeObserver: MutationObserver | null = null;
+  private treeObserverTimer: number | null = null;
   private embedResetStyle: HTMLStyleElement | null = null;
+  private embedResizeObserver: ResizeObserver | null = null;
+  private observedEmbedContents = new Set<HTMLElement>();
   private debug: Record<string, unknown> = {};
 
   public onload(): void {
@@ -111,6 +118,9 @@ class DropImporterPlugin extends Plugin {
     this.embedResetStyle.dataset.cloudDocumentSuite = "borderless-embeds";
     this.embedResetStyle.textContent = EMBED_RESET_CSS;
     (document.head || document.documentElement).append(this.embedResetStyle);
+    this.refreshCloudDocumentEmbeds();
+    this.embedResizeObserver = new ResizeObserver(() => this.fitCloudDocumentEmbeds());
+    this.fitCloudDocumentEmbeds();
     this.eventBus.on("open-menu-doctree", this.onOpenDocTreeMenu);
     void this.recordDebug("onload");
     showMessage("云文档套件已启动", 3000, "info");
@@ -118,7 +128,21 @@ class DropImporterPlugin extends Plugin {
 
   public onLayoutReady(): void {
     this.bindFileTrees();
-    this.treeObserver = new MutationObserver(() => this.bindFileTrees());
+    this.refreshCloudDocumentEmbeds();
+    this.fitCloudDocumentEmbeds();
+    this.treeObserver = new MutationObserver((records) => {
+      if (this.mutationsAffectCloudDocument(records)) {
+        // MutationObserver callbacks run before the next paint. Fit the newly
+        // inserted editor immediately so the 720px fallback is never visible.
+        this.refreshCloudDocumentEmbeds();
+        this.fitCloudDocumentEmbeds();
+      }
+      if (this.treeObserverTimer !== null) window.clearTimeout(this.treeObserverTimer);
+      this.treeObserverTimer = window.setTimeout(() => {
+        this.treeObserverTimer = null;
+        this.bindFileTrees();
+      }, 120);
+    });
     this.treeObserver.observe(document.body, { childList: true, subtree: true });
     void this.recordDebug("layout-ready", { treeCount: this.boundTrees.size });
   }
@@ -131,8 +155,15 @@ class DropImporterPlugin extends Plugin {
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
     this.embedResetStyle?.remove();
     this.embedResetStyle = null;
+    this.embedResizeObserver?.disconnect();
+    this.embedResizeObserver = null;
+    this.observedEmbedContents.clear();
     this.treeObserver?.disconnect();
     this.treeObserver = null;
+    if (this.treeObserverTimer !== null) {
+      window.clearTimeout(this.treeObserverTimer);
+      this.treeObserverTimer = null;
+    }
     for (const tree of this.boundTrees) {
       tree.removeEventListener("dragenter", this.onTreeDragEnter, true);
       tree.removeEventListener("dragover", this.onTreeDragOver, true);
@@ -290,6 +321,13 @@ class DropImporterPlugin extends Plugin {
   }
 
   private bindFileTrees(): void {
+    for (const tree of this.boundTrees) {
+      if (tree.isConnected) continue;
+      tree.removeEventListener("dragenter", this.onTreeDragEnter, true);
+      tree.removeEventListener("dragover", this.onTreeDragOver, true);
+      tree.removeEventListener("drop", this.onTreeDrop, true);
+      this.boundTrees.delete(tree);
+    }
     let added = 0;
     for (const tree of document.querySelectorAll<HTMLElement>(FILE_TREE_SELECTOR)) {
       if (this.boundTrees.has(tree)) continue;
@@ -617,6 +655,75 @@ class DropImporterPlugin extends Plugin {
     return result.data;
   }
 
+  private refreshCloudDocumentEmbeds(): void {
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>(CLOUD_DOCUMENT_EDITOR_IFRAME)) {
+      const rawSource = frame.getAttribute("src") || frame.getAttribute("data-src");
+      if (!rawSource) continue;
+
+      let url: URL;
+      try {
+        url = new URL(rawSource, window.location.href);
+      } catch {
+        continue;
+      }
+      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet)-editor\.html$/i.test(url.pathname)) continue;
+      if (url.searchParams.get("v") === PLUGIN_VERSION) continue;
+
+      url.searchParams.set("v", PLUGIN_VERSION);
+      const refreshedSource = `${url.pathname}${url.search}${url.hash}`;
+      frame.setAttribute("data-src", refreshedSource);
+      frame.setAttribute("src", refreshedSource);
+    }
+  }
+
+  private mutationsAffectCloudDocument(records: MutationRecord[]): boolean {
+    return records.some((record) => {
+      const target = record.target instanceof Element
+        ? record.target
+        : record.target.parentElement;
+      if (target?.closest(".protyle")?.querySelector(CLOUD_DOCUMENT_EDITOR_IFRAME)) return true;
+
+      return Array.from(record.addedNodes).some((node) =>
+        node instanceof Element && (
+          node.matches(CLOUD_DOCUMENT_EDITOR_IFRAME) ||
+          node.querySelector(CLOUD_DOCUMENT_EDITOR_IFRAME)
+        )
+      );
+    });
+  }
+
+  private fitCloudDocumentEmbeds(): void {
+    for (const content of this.observedEmbedContents) {
+      if (!content.isConnected) {
+        this.embedResizeObserver?.unobserve(content);
+        this.observedEmbedContents.delete(content);
+      }
+    }
+
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>(CLOUD_DOCUMENT_EDITOR_IFRAME)) {
+      const block = frame.closest<HTMLElement>("[data-node-id].iframe");
+      const editor = block?.closest<HTMLElement>(EDITOR_SELECTOR);
+      const content = block?.closest<HTMLElement>(".protyle-content");
+      if (!block || !editor || !content) continue;
+
+      if (!this.observedEmbedContents.has(content)) {
+        this.embedResizeObserver?.observe(content);
+        this.observedEmbedContents.add(content);
+      }
+
+      const editorStyle = getComputedStyle(editor);
+      const inlineStart = Number.parseFloat(editorStyle.paddingLeft) || 0;
+      const inlineEnd = Number.parseFloat(editorStyle.paddingRight) || 0;
+      const contentRect = content.getBoundingClientRect();
+      const blockRect = block.getBoundingClientRect();
+      const availableHeight = Math.max(480, Math.floor(contentRect.bottom - blockRect.top));
+
+      block.style.setProperty("--cloud-document-inline-start", `${-inlineStart}px`);
+      block.style.setProperty("--cloud-document-inline-extra", `${inlineStart + inlineEnd}px`);
+      block.style.setProperty("--cloud-document-editor-height", `${availableHeight}px`);
+    }
+  }
+
   private buildAttachmentMarkdown(assets: UploadedAsset[]): string {
     return assets
       .map(({ originalName, assetPath }) => {
@@ -636,7 +743,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   private isSpreadsheetFile(fileName: string): boolean {
-    return /\.(?:xlsx|xls|xlsm|xlsb|csv)$/i.test(fileName);
+    return /\.xlsx$/i.test(fileName);
   }
 
   private isWordFile(fileName: string): boolean {

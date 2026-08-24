@@ -4,28 +4,24 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ![Feature preview](preview.png)
 
-## Changelog
+## Changelog (short version)
 
-### v1.6.3
+- **v1.6.7**: Eliminated the resize flash when opening spreadsheets or mind maps.
+- **v1.6.6**: Made spreadsheet and mind-map workspaces fit the active editor panel.
+- **v1.6.5**: Removed outer borders, shadows, and remaining visual edges.
+- **v1.6.4**: Improved Excel data preservation, `.mm` field preservation, security, and cache refreshes.
+- **v1.6.3**: Restored Excel gridlines and improved responsive editor layouts.
+- **v1.6.2**: Fixed `digest`, attachment timestamp, and consecutive auto-save issues.
+- **v1.6.1**: Added document sync revision markers.
+- **v1.6.0**: Began writing Excel and `.mm` edits back to SiYuan assets.
+- **v1.5.0**: Improved mind-map direction, formatting, task states, and asset cache busting.
+- **v1.4.2**: Fixed spreadsheet row and column expansion feedback.
+- **v1.4.1**: Added Linux/Docker and `browser-desktop` support.
+- **v1.4.0**: Introduced office document, spreadsheet, PDF, XMind, and FreeMind import and preview.
 
-- Restored subtle spreadsheet gridlines while keeping cloud-document embeds free of outer borders, shadows, and resize decorations.
-- Reset reopened sheets to the top-left and made spreadsheet and mind-map heights responsive to the window.
-- Moved the mind-map help and save-status overlays away from the native left and bottom-right toolbars.
+## Next
 
-### v1.6.2
-
-- Fixed `digest` failures on LAN/NAS HTTP pages and incorrect attachment timestamps that interfered with sync.
-- Removed manual save buttons while retaining automatic persistence, conflict confirmation, and local recovery.
-- Protected newer recovery data from being cleared by an older in-flight save.
-
-### v1.6.1
-
-- Updated a document sync revision marker after writing an edited attachment back to SiYuan.
-
-### v1.6.0
-
-- Began writing Excel and FreeMind edits directly to SiYuan assets.
-- Added save status, local failure recovery, cross-page/device conflict detection, and versioned editor assets.
+Development will next focus on improving `.mm` and Excel support, including format compatibility, editing capabilities, data preservation, and large-file usability.
 
 ## Features
 

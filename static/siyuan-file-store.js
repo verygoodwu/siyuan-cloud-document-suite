@@ -111,7 +111,12 @@ export class SiyuanFileStore {
     } catch {
       pathname = url.pathname;
     }
-    if (url.origin !== location.origin || !pathname.startsWith("/assets/")) {
+    const segments = pathname.split("/");
+    if (url.origin !== location.origin
+      || !pathname.startsWith("/assets/")
+      || pathname.includes("\\")
+      || pathname.includes("\0")
+      || segments.some((segment) => segment === "." || segment === "..")) {
       throw new Error("仅允许保存思源 assets 目录中的附件");
     }
     this.asset = url.pathname;

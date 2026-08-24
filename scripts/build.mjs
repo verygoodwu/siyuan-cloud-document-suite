@@ -1,8 +1,11 @@
 import { build } from "esbuild";
 import { resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+
+await rm("dist", { recursive: true, force: true });
+await mkdir("dist", { recursive: true });
 
 await build({
   absWorkingDir: process.cwd(),

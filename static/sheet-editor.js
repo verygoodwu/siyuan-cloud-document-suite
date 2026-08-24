@@ -1,4 +1,17 @@
-import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
+import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__";
+import {
+  SHEET_RECOVERY_SCHEMA,
+  addWorksheet,
+  applyLegacyRecovery,
+  applyRecoveryPayload,
+  deleteWorksheet,
+  makeRecoveryPayload,
+  parseWorkbookModel,
+  renameWorksheet,
+  serializeWorkbookModel,
+  setCellText,
+  sheetDimensions
+} from "./sheet-workbook.js?v=__PLUGIN_VERSION__";
 
 (() => {
   const asset = new URLSearchParams(location.search).get("asset");
@@ -13,17 +26,24 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
   let saveTimer;
   let saveInFlight = false;
   let saveAgain = false;
+  let sizeWarning = "";
 
   const columnName = (index) => {
     let result = "";
-    for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) result = String.fromCharCode(65 + ((value - 1) % 26)) + result;
+    for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) {
+      result = String.fromCharCode(65 + ((value - 1) % 26)) + result;
+    }
     return result;
   };
-  const setStatus = (text) => { status.textContent = text; };
+
+  const setStatus = (text) => {
+    status.textContent = sizeWarning ? `${text} · ${sizeWarning}` : text;
+  };
+
   const scheduleSave = () => {
     clearTimeout(saveTimer);
     try {
-      store.cacheRecovery(model);
+      store.cacheRecovery(makeRecoveryPayload(model));
       setStatus("正在写入思源…");
     } catch (error) {
       console.error(error);
@@ -31,60 +51,110 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
     }
     saveTimer = setTimeout(() => void persist(false), 700);
   };
+
   const uniqueName = (base) => {
-    let name = base, index = 2;
-    while (model.sheets.some((sheet) => sheet.name === name)) name = `${base}${index++}`;
+    let name = base;
+    let index = 2;
+    while (model.sheets.some((sheet) => sheet.name.toLowerCase() === name.toLowerCase())) {
+      name = `${base}${index++}`;
+    }
     return name;
   };
-  const dimensions = (sheet) => ({
-    rows: Math.min(500, Math.max(30, sheet.data.length)),
-    cols: Math.min(50, Math.max(15, ...sheet.data.map((row) => row.length)))
-  });
+
   function renderTabs() {
     tabs.querySelectorAll(".tab").forEach((element) => element.remove());
     model.sheets.forEach((sheet, index) => {
-      const button = document.createElement("button"); button.className = `tab${index === active ? " active" : ""}`; button.textContent = sheet.name;
-      button.addEventListener("click", () => { active = index; render(); });
+      const button = document.createElement("button");
+      button.className = `tab${index === active ? " active" : ""}`;
+      button.textContent = sheet.name;
+      button.addEventListener("click", () => {
+        active = index;
+        render();
+      });
       button.addEventListener("dblclick", () => renameSheet());
       tabs.insertBefore(button, addSheetButton);
     });
   }
+
   function renderGrid() {
     grid.replaceChildren();
-    const sheet = model.sheets[active], { rows, cols } = dimensions(sheet);
-    const head = document.createElement("thead"), headRow = document.createElement("tr"), corner = document.createElement("th"); corner.className = "row-head corner"; headRow.append(corner);
-    for (let col = 0; col < cols; col++) { const th = document.createElement("th"); th.textContent = columnName(col); headRow.append(th); }
-    head.append(headRow); grid.append(head);
+    const sheet = model.sheets[active];
+    const { rows, cols, truncatedRows, truncatedCols } = sheetDimensions(sheet);
+    sizeWarning = truncatedRows || truncatedCols
+      ? `为保证性能仅显示前 ${rows} 行 × ${cols} 列，未显示区域仍会原样保留`
+      : "";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    const corner = document.createElement("th");
+    corner.className = "row-head corner";
+    headRow.append(corner);
+    for (let col = 0; col < cols; col++) {
+      const th = document.createElement("th");
+      th.textContent = columnName(col);
+      headRow.append(th);
+    }
+    head.append(headRow);
+    grid.append(head);
+
     const body = document.createElement("tbody");
     for (let row = 0; row < rows; row++) {
-      const tr = document.createElement("tr"), rowHead = document.createElement("th"); rowHead.className = "row-head"; rowHead.textContent = String(row + 1); tr.append(rowHead);
+      const tr = document.createElement("tr");
+      const rowHead = document.createElement("th");
+      rowHead.className = "row-head";
+      rowHead.textContent = String(row + 1);
+      tr.append(rowHead);
       for (let col = 0; col < cols; col++) {
-        const td = document.createElement("td"); td.contentEditable = "plaintext-only"; td.textContent = String(sheet.data[row]?.[col] ?? "");
-        td.addEventListener("input", () => { while (sheet.data.length <= row) sheet.data.push([]); sheet.data[row][col] = td.textContent ?? ""; scheduleSave(); });
+        const td = document.createElement("td");
+        td.contentEditable = "plaintext-only";
+        td.textContent = String(sheet.data[row]?.[col] ?? "");
+        td.addEventListener("input", () => {
+          setCellText(XLSX, model, sheet.name, row, col, td.textContent ?? "");
+          scheduleSave();
+        });
         tr.append(td);
       }
       body.append(tr);
     }
     grid.append(body);
   }
-  function render() { renderTabs(); renderGrid(); }
+
+  function render() {
+    renderTabs();
+    renderGrid();
+    setStatus("可编辑 · 修改将自动写入思源");
+  }
+
+  function validSheetName(value) {
+    return value && !/[\\/:?*\[\]\x00-\x1f]/.test(value);
+  }
+
   function renameSheet() {
-    const sheet = model.sheets[active]; const next = prompt("Sheet 名称", sheet.name)?.trim().slice(0, 31);
-    if (!next || model.sheets.some((item, index) => index !== active && item.name === next)) return;
-    sheet.name = next; scheduleSave(); renderTabs();
+    const sheet = model.sheets[active];
+    const next = prompt("Sheet 名称", sheet.name)?.trim().slice(0, 31);
+    if (!next || next === sheet.name) return;
+    if (!validSheetName(next)) {
+      alert("Sheet 名称不能包含 \\ / : ? * [ ] 等字符");
+      return;
+    }
+    try {
+      renameWorksheet(model, sheet.name, next);
+      scheduleSave();
+      renderTabs();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
+    }
   }
-  function createWorkbook() {
-    const workbook = XLSX.utils.book_new();
-    model.sheets.forEach((sheet) => XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sheet.data), sheet.name));
-    return workbook;
-  }
-  function serializeWorkbook() {
-    return new Uint8Array(XLSX.write(createWorkbook(), { bookType: "xlsx", type: "array" }));
-  }
+
   function exportWorkbook() {
-    const workbook = createWorkbook();
-    XLSX.writeFile(workbook, `${model.title || "工作簿"}.xlsx`); setStatus("已导出 .xlsx");
+    XLSX.writeFile(model.workbook, `${model.title || "工作簿"}.xlsx`, {
+      bookType: "xlsx",
+      cellStyles: true,
+      bookVBA: true,
+      compression: true
+    });
+    setStatus("已导出 .xlsx");
   }
+
   async function persist(force) {
     if (saveInFlight) {
       saveAgain = true;
@@ -92,9 +162,11 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
     }
     saveInFlight = true;
     let overwriteConflict = false;
+    const operationCount = model.operations.length;
     try {
       setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
-      const saved = await store.save(serializeWorkbook(), { force });
+      const saved = await store.save(serializeWorkbookModel(XLSX, model), { force });
+      model.operations.splice(0, operationCount);
       const savedAt = new Date().toLocaleTimeString();
       setStatus(saved.unchanged
         ? `内容已保存 ${savedAt}`
@@ -118,58 +190,95 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
       }
     }
   }
+
   function focusNewCell({ row, col }) {
     requestAnimationFrame(() => {
       const wrapper = document.querySelector(".grid-wrap");
       if (row != null) wrapper.scrollTop = wrapper.scrollHeight;
       if (col != null) wrapper.scrollLeft = wrapper.scrollWidth;
-      const cell = grid.querySelector(`tbody tr:nth-child(${(row ?? 0) + 1}) td:nth-child(${(col ?? 0) + 2})`);
+      const cell = grid.querySelector(
+        `tbody tr:nth-child(${(row ?? 0) + 1}) td:nth-child(${(col ?? 0) + 2})`
+      );
       cell?.focus();
     });
   }
+
   function addRow() {
     const sheet = model.sheets[active];
-    const { rows } = dimensions(sheet);
-    while (sheet.data.length < rows) sheet.data.push([]);
-    sheet.data.push([]);
-    scheduleSave(); renderGrid(); focusNewCell({ row: rows, col: 0 });
+    const { rows, truncatedRows } = sheetDimensions(sheet);
+    if (truncatedRows) {
+      alert("该工作表已超过当前可视行数限制，超出区域会保留但请使用 Excel 编辑");
+      return;
+    }
+    sheet.viewRows = rows + 1;
+    scheduleSave();
+    renderGrid();
+    focusNewCell({ row: rows, col: 0 });
   }
+
   function addColumn() {
     const sheet = model.sheets[active];
-    const { rows, cols } = dimensions(sheet);
-    while (sheet.data.length < rows) sheet.data.push([]);
-    sheet.data.forEach((row) => { while (row.length <= cols) row.push(""); });
-    scheduleSave(); renderGrid(); focusNewCell({ row: 0, col: cols });
+    const { cols, truncatedCols } = sheetDimensions(sheet);
+    if (truncatedCols) {
+      alert("该工作表已超过当前可视列数限制，超出区域会保留但请使用 Excel 编辑");
+      return;
+    }
+    sheet.viewCols = cols + 1;
+    scheduleSave();
+    renderGrid();
+    focusNewCell({ row: 0, col: cols });
   }
-  function parseWorkbook(bytes) {
-    const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
-    return { title: decodeURIComponent(asset.split("/").pop() || "工作簿").replace(/-[0-9]{14}-[a-z0-9]+\.[^.]+$/i, ""), sheets: workbook.SheetNames.map((name) => ({ name, data: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: false, defval: "" }) })) };
-  }
+
   async function load() {
-    const remoteModel = parseWorkbook(await store.loadRemote());
+    const remoteModel = parseWorkbookModel(XLSX, await store.loadRemote(), asset);
     const recovery = store.readRecovery();
     if (!recovery) return { value: remoteModel, state: "remote" };
-    if (recovery.legacy) {
-      if (confirm("检测到旧版本保存在本机的 Excel 修改。是否立即写入思源附件并参与同步？")) {
-        return { value: recovery.payload, state: "legacy-recovery" };
+    const payload = recovery.payload;
+    if (payload?.schema === SHEET_RECOVERY_SCHEMA) {
+      applyRecoveryPayload(XLSX, remoteModel, payload);
+      if (recovery.baseHash === store.baseHash) {
+        return { value: remoteModel, state: "recovery" };
       }
-      return { value: remoteModel, state: "legacy-kept" };
+      store.conflicted = true;
+      return { value: remoteModel, state: "conflict" };
     }
-    if (recovery.baseHash === store.baseHash) {
-      return { value: recovery.payload, state: "recovery" };
-    }
-    store.conflicted = true;
-    return { value: recovery.payload, state: "conflict" };
+    const acceptLegacy = confirm(
+      "检测到旧版本保存的表格恢复数据。旧缓存仅包含文本，恢复可能丢失公式和格式。是否仍要恢复？"
+    );
+    if (!acceptLegacy) return { value: remoteModel, state: "legacy-kept" };
+    applyLegacyRecovery(XLSX, remoteModel, payload);
+    return {
+      value: remoteModel,
+      state: recovery.baseHash === store.baseHash ? "legacy-recovery" : "conflict"
+    };
   }
+
   document.querySelector("#add-row").addEventListener("click", addRow);
   document.querySelector("#add-col").addEventListener("click", addColumn);
   document.querySelector("#rename").addEventListener("click", renameSheet);
-  document.querySelector("#delete").addEventListener("click", () => { if (model.sheets.length === 1) return alert("至少保留一个 Sheet"); if (confirm(`删除 ${model.sheets[active].name}？`)) { model.sheets.splice(active, 1); active = Math.max(0, active - 1); scheduleSave(); render(); } });
+  document.querySelector("#delete").addEventListener("click", () => {
+    if (!confirm(`删除 ${model.sheets[active].name}？`)) return;
+    try {
+      deleteWorksheet(model, model.sheets[active].name);
+      active = Math.max(0, active - 1);
+      scheduleSave();
+      render();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
+    }
+  });
   document.querySelector("#export").addEventListener("click", exportWorkbook);
-  addSheetButton.addEventListener("click", () => { model.sheets.push({ name: uniqueName("Sheet"), data: [[""]] }); active = model.sheets.length - 1; scheduleSave(); render(); });
+  addSheetButton.addEventListener("click", () => {
+    const name = uniqueName("Sheet");
+    addWorksheet(XLSX, model, name);
+    active = model.sheets.length - 1;
+    scheduleSave();
+    render();
+  });
+
   load().then(({ value, state }) => {
     model = value;
-    if (!model.sheets.length) model.sheets = [{ name: "Sheet1", data: [[""]] }];
+    if (!model.sheets.length) addWorksheet(XLSX, model, "Sheet1", false);
     render();
     requestAnimationFrame(() => {
       const wrapper = document.querySelector(".grid-wrap");
@@ -177,7 +286,7 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
       wrapper.scrollLeft = 0;
     });
     if (state === "conflict") {
-      setStatus("检测到跨设备保存冲突：当前显示本机恢复内容，尚未覆盖思源");
+      setStatus("检测到跨设备保存冲突：当前显示合并后的本机修改，尚未覆盖思源");
       if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前表格覆盖思源中的版本吗？")) {
         void persist(true);
       }
@@ -189,5 +298,8 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
     } else {
       setStatus("可编辑 · 修改将自动写入思源");
     }
-  }).catch((error) => { console.error(error); setStatus(error.message || String(error)); });
+  }).catch((error) => {
+    console.error(error);
+    setStatus(error instanceof Error ? error.message : String(error));
+  });
 })();
