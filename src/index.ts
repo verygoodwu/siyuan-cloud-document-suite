@@ -29,7 +29,39 @@ const EDITOR_SELECTOR = ".protyle-wysiwyg";
 const BLOCK_SELECTOR = "[data-node-id]";
 const TREE_DOCUMENT_SELECTOR = ".b3-list-item[data-node-id]";
 const FILE_TREE_SELECTOR = ".sy__file";
-const EMBED_STYLE = "width: 100%; border: 0; border-radius: 0; background: transparent; display: block;";
+const CLOUD_DOCUMENT_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/"], [data-src*="/plugins/siyuan-cloud-document-suite/"])';
+const CLOUD_DOCUMENT_EDITOR_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"])';
+const EMBED_STYLE = "width: 100%; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: transparent; display: block;";
+const EMBED_RESET_CSS = `
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}),
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content > ${CLOUD_DOCUMENT_IFRAME} {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  background: transparent !important;
+}
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_EDITOR_IFRAME}) {
+  height: clamp(480px, calc(100vh - 200px), 720px) !important;
+  min-height: 480px !important;
+  padding: 0 !important;
+}
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_EDITOR_IFRAME}) > .iframe-content,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_EDITOR_IFRAME}) > .iframe-content > ${CLOUD_DOCUMENT_EDITOR_IFRAME} {
+  height: 100% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  display: block !important;
+}
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content > .protyle-action__drag,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content > .protyle-action__drag::after {
+  display: none !important;
+  opacity: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+`;
 
 interface DropTarget {
   id: string;
@@ -65,6 +97,7 @@ class DropImporterPlugin extends Plugin {
   private toastTimer: number | null = null;
   private boundTrees = new Set<HTMLElement>();
   private treeObserver: MutationObserver | null = null;
+  private embedResetStyle: HTMLStyleElement | null = null;
   private debug: Record<string, unknown> = {};
 
   public onload(): void {
@@ -74,6 +107,10 @@ class DropImporterPlugin extends Plugin {
     window.addEventListener("dragleave", this.onDragLeave, true);
     window.addEventListener("dragover", this.onDragOver, true);
     window.addEventListener("drop", this.onDrop, true);
+    this.embedResetStyle = document.createElement("style");
+    this.embedResetStyle.dataset.cloudDocumentSuite = "borderless-embeds";
+    this.embedResetStyle.textContent = EMBED_RESET_CSS;
+    (document.head || document.documentElement).append(this.embedResetStyle);
     this.eventBus.on("open-menu-doctree", this.onOpenDocTreeMenu);
     void this.recordDebug("onload");
     showMessage("云文档套件已启动", 3000, "info");
@@ -92,6 +129,8 @@ class DropImporterPlugin extends Plugin {
     window.removeEventListener("dragover", this.onDragOver, true);
     window.removeEventListener("drop", this.onDrop, true);
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
+    this.embedResetStyle?.remove();
+    this.embedResetStyle = null;
     this.treeObserver?.disconnect();
     this.treeObserver = null;
     for (const tree of this.boundTrees) {
@@ -626,7 +665,7 @@ class DropImporterPlugin extends Plugin {
     );
     if (!root) throw new Error("FreeMind root node not found");
     const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: 720px; min-height: 560px;" frameborder="0"></iframe>`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
   private parseFreeMindNode(
@@ -934,7 +973,7 @@ class DropImporterPlugin extends Plugin {
     asset: UploadedAsset
   ): string {
     const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: 760px; min-height: 600px;" frameborder="0"></iframe>`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
   private escapeMarkdownHeading(value: string): string {

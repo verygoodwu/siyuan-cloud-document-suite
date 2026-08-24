@@ -91,22 +91,28 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
       return;
     }
     saveInFlight = true;
+    let overwriteConflict = false;
     try {
       setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
       const saved = await store.save(serializeWorkbook(), { force });
-      setStatus(saved.syncMarked
-        ? `已写入并加入同步 ${new Date().toLocaleTimeString()}`
-        : `附件已保存；未找到文档同步标记 ${new Date().toLocaleTimeString()}`);
+      const savedAt = new Date().toLocaleTimeString();
+      setStatus(saved.unchanged
+        ? `内容已保存 ${savedAt}`
+        : `已写入思源附件 ${savedAt}`);
     } catch (error) {
       console.error(error);
       if (error instanceof SaveConflictError) {
         setStatus("保存冲突：思源附件已有新版本，本机修改已保留");
+        overwriteConflict = confirm("思源附件已在其他页面或设备发生变化。确定用当前页面内容覆盖远端版本吗？");
       } else {
         setStatus(`保存失败（本机修改已保留）：${error instanceof Error ? error.message : String(error)}`);
       }
     } finally {
       saveInFlight = false;
-      if (saveAgain) {
+      if (overwriteConflict) {
+        saveAgain = false;
+        void persist(true);
+      } else if (saveAgain) {
         saveAgain = false;
         void persist(false);
       }
@@ -159,21 +165,22 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
   document.querySelector("#add-col").addEventListener("click", addColumn);
   document.querySelector("#rename").addEventListener("click", renameSheet);
   document.querySelector("#delete").addEventListener("click", () => { if (model.sheets.length === 1) return alert("至少保留一个 Sheet"); if (confirm(`删除 ${model.sheets[active].name}？`)) { model.sheets.splice(active, 1); active = Math.max(0, active - 1); scheduleSave(); render(); } });
-  document.querySelector("#save").addEventListener("click", () => {
-    if (store.conflicted) {
-      if (confirm("思源附件已在其他页面或设备发生变化。确定用当前页面内容覆盖远端版本吗？")) void persist(true);
-    } else {
-      void persist(false);
-    }
-  });
   document.querySelector("#export").addEventListener("click", exportWorkbook);
   addSheetButton.addEventListener("click", () => { model.sheets.push({ name: uniqueName("Sheet"), data: [[""]] }); active = model.sheets.length - 1; scheduleSave(); render(); });
   load().then(({ value, state }) => {
     model = value;
     if (!model.sheets.length) model.sheets = [{ name: "Sheet1", data: [[""]] }];
     render();
+    requestAnimationFrame(() => {
+      const wrapper = document.querySelector(".grid-wrap");
+      wrapper.scrollTop = 0;
+      wrapper.scrollLeft = 0;
+    });
     if (state === "conflict") {
       setStatus("检测到跨设备保存冲突：当前显示本机恢复内容，尚未覆盖思源");
+      if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前表格覆盖思源中的版本吗？")) {
+        void persist(true);
+      }
     } else if (state === "legacy-kept") {
       setStatus("已读取思源附件；旧版本机缓存仍保留");
     } else if (state === "legacy-recovery" || state === "recovery") {

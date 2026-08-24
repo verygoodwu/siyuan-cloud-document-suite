@@ -11,6 +11,7 @@ const copyVersionedHtml = async (source, target) => {
 await mkdir("dist", { recursive: true });
 await Promise.all([
   copyFile("plugin.json", "dist/plugin.json"),
+  copyFile("index.css", "dist/index.css"),
   copyFile("README.md", "dist/README.md"),
   copyFile("README.zh-CN.md", "dist/README.zh-CN.md"),
   copyFile("LICENSE", "dist/LICENSE"),

@@ -4,7 +4,6 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
 const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
 const status = document.querySelector("#status");
-const saveButton = document.querySelector("#save");
 const exportButton = document.querySelector("#export");
 const nodeTools = document.querySelector("#node-tools");
 const storageKey = `siyuan-mm-editor:${asset}`;
@@ -33,8 +32,24 @@ function setStatus(text) {
   status.textContent = text;
 }
 
+function createRandomId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  const random = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    globalThis.crypto.getRandomValues(random);
+  } else {
+    for (let index = 0; index < random.length; index++) random[index] = Math.floor(Math.random() * 256);
+  }
+  random[6] = (random[6] & 0x0f) | 0x40;
+  random[8] = (random[8] & 0x3f) | 0x80;
+  const value = Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
 function makeId(element) {
-  return element.getAttribute("ID") || `mm-${crypto.randomUUID()}`;
+  return element.getAttribute("ID") || `mm-${createRandomId()}`;
 }
 
 function nodeText(element) {
@@ -342,38 +357,40 @@ try {
       return;
     }
     saveInFlight = true;
+    let overwriteConflict = false;
     try {
       setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
       const bytes = new TextEncoder().encode(serializeMm(mind));
       const saved = await store.save(bytes, { force });
-      setStatus(saved.syncMarked
-        ? `已写入并加入同步 ${new Date().toLocaleTimeString()}`
-        : `附件已保存；未找到文档同步标记 ${new Date().toLocaleTimeString()}`);
+      const savedAt = new Date().toLocaleTimeString();
+      setStatus(saved.unchanged
+        ? `内容已保存 ${savedAt}`
+        : `已写入思源附件 ${savedAt}`);
     } catch (error) {
       console.error(error);
       if (error instanceof SaveConflictError) {
         setStatus("保存冲突：思源附件已有新版本，本机修改已保留");
+        overwriteConflict = confirm("思源附件已在其他页面或设备发生变化。确定用当前脑图覆盖远端版本吗？");
       } else {
         setStatus(`保存失败（本机修改已保留）：${error instanceof Error ? error.message : String(error)}`);
       }
     } finally {
       saveInFlight = false;
-      if (saveAgain) {
+      if (overwriteConflict) {
+        saveAgain = false;
+        void persistMind(true);
+      } else if (saveAgain) {
         saveAgain = false;
         void persistMind(false);
       }
     }
   }
-  saveButton.addEventListener("click", () => {
-    if (store.conflicted) {
-      if (confirm("思源附件已在其他页面或设备发生变化。确定用当前脑图覆盖远端版本吗？")) void persistMind(true);
-    } else {
-      void persistMind(false);
-    }
-  });
   exportButton.addEventListener("click", () => downloadMm(mind));
   if (initialState === "conflict") {
     setStatus("检测到跨设备保存冲突：当前显示本机恢复内容，尚未覆盖思源");
+    if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前脑图覆盖思源中的版本吗？")) {
+      void persistMind(true);
+    }
   } else if (initialState === "legacy-kept") {
     setStatus("已读取思源附件；旧版本机缓存仍保留");
   } else if (initialState === "legacy-recovery" || initialState === "recovery") {

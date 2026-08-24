@@ -4,6 +4,29 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ![Feature preview](preview.png)
 
+## Changelog
+
+### v1.6.3
+
+- Restored subtle spreadsheet gridlines while keeping cloud-document embeds free of outer borders, shadows, and resize decorations.
+- Reset reopened sheets to the top-left and made spreadsheet and mind-map heights responsive to the window.
+- Moved the mind-map help and save-status overlays away from the native left and bottom-right toolbars.
+
+### v1.6.2
+
+- Fixed `digest` failures on LAN/NAS HTTP pages and incorrect attachment timestamps that interfered with sync.
+- Removed manual save buttons while retaining automatic persistence, conflict confirmation, and local recovery.
+- Protected newer recovery data from being cleared by an older in-flight save.
+
+### v1.6.1
+
+- Updated a document sync revision marker after writing an edited attachment back to SiYuan.
+
+### v1.6.0
+
+- Began writing Excel and FreeMind edits directly to SiYuan assets.
+- Added save status, local failure recovery, cross-page/device conflict detection, and versioned editor assets.
+
 ## Features
 
 - Drag files from Windows Explorer onto a document or notebook in the document tree. The plugin uploads the source file and creates a same-named child document.
