@@ -6,6 +6,7 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Changelog (short version)
 
+- **v1.6.8**: Mind-map tasks now toggle a gray strikethrough state directly, with a saved hierarchy view and corrected task-circle/underline rendering.
 - **v1.6.7**: Eliminated the resize flash when opening spreadsheets or mind maps.
 - **v1.6.6**: Made spreadsheet and mind-map workspaces fit the active editor panel.
 - **v1.6.5**: Removed outer borders, shadows, and remaining visual edges.

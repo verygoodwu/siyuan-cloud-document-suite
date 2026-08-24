@@ -7,31 +7,40 @@
   <style>
     html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
     #map .map-container{background:#fff!important}
-    #status,#help,#export{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
+    #status,#help,#export,#view-style{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
     #status{left:12px;right:auto;bottom:10px}
-    #help{left:72px;right:96px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    #export{top:10px;border:0;cursor:pointer}
+    #help{left:72px;right:182px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #export,#view-style{top:10px;border:0;cursor:pointer}
     #export{right:12px;color:#3f73f1;background:#fff}
+    #view-style{right:88px;color:#3f73f1;background:#fff}
+    #view-style.active{color:#fff;background:#3f73f1}
     #node-tools{position:fixed;z-index:30;left:50%;bottom:18px;transform:translateX(-50%);display:none;align-items:center;gap:5px;padding:7px;background:#25272b;border-radius:8px;box-shadow:0 5px 18px #0004}
     #node-tools button{min-width:30px;height:30px;padding:0 8px;border:0;border-radius:5px;background:transparent;color:#fff;cursor:pointer;font:14px system-ui}
     #node-tools button:hover,#node-tools button.active{background:#ffffff24}
     #node-tools .color{width:25px;min-width:25px;padding:0;border:2px solid #fff6}
     .quick-add{pointer-events:auto!important;position:absolute;right:-24px;top:50%;transform:translateY(-50%);width:19px;height:19px;border:0;border-radius:50%;padding:0;background:#3478f6;color:#fff;cursor:pointer;font:bold 16px/18px system-ui;box-shadow:0 1px 3px #0003}
     .lhs .quick-add{right:auto;left:-24px}
-    .task-box{pointer-events:auto!important;display:inline-grid!important;place-items:center;width:17px;height:17px;margin-right:6px;border:1.5px solid #667085;border-radius:50%;vertical-align:-3px;color:#fff;font:bold 12px/1 system-ui}
-    .task-box.done{border-color:#28a66a;background:#28a66a}
-    me-tpc.task-done .text{text-decoration:line-through;opacity:.55}
+    me-tpc.task-done{text-decoration:none!important}
+    me-tpc.task-done .text{color:#98a2b3!important;text-decoration:line-through!important;text-decoration-color:currentColor!important;opacity:1}
+    body.hierarchy-view me-tpc[data-depth="0"]{display:flex!important;align-items:center;justify-content:center;box-sizing:border-box;min-width:72px;min-height:52px;padding:12px 18px!important;border:0!important;border-radius:7px!important;background:#3f73f1!important;color:#fff!important;box-shadow:0 6px 12px #3478f633!important}
+    body.hierarchy-view me-tpc[data-depth="1"]{display:flex!important;align-items:center;justify-content:center;box-sizing:border-box;min-height:38px;padding:9px 16px!important;border:0!important;border-radius:7px!important;background:#f0f1f3!important;color:#8f98a8!important;box-shadow:none!important}
+    body.hierarchy-view me-tpc[data-depth]:not([data-depth="0"]):not([data-depth="1"]){padding:6px 4px!important;border-color:transparent!important;border-radius:0!important;background:transparent!important;color:#98a2b3!important;box-shadow:none!important}
+    body.hierarchy-view me-tpc.selected:not([data-depth="0"]){border-radius:7px!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
+    body.hierarchy-view me-tpc[data-depth="0"].selected{box-shadow:0 6px 12px #3478f633,0 0 0 2px #fff,0 0 0 4px #3f73f1!important}
+    #input-box{border:0!important;border-radius:7px!important;outline:0!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
+    body.hierarchy-view .lines path,body.hierarchy-view .subLines path{stroke:#5d85ff!important;stroke-width:2px!important}
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="help">Tab/＋：向右添加子节点　·　根节点按 Shift+Tab：向左添加　·　拖节点：调整位置　·　双击：编辑</div>
+  <button id="view-style" type="button" aria-pressed="false">层级样式</button>
   <button id="export" type="button">导出 .mm</button>
   <div id="node-tools" aria-label="节点格式工具栏">
     <button type="button" data-action="bold" title="加粗"><b>B</b></button>
     <button type="button" data-action="italic" title="斜体"><i>I</i></button>
     <button type="button" data-action="underline" title="下划线"><u>U</u></button>
-    <button type="button" data-action="task" title="设为任务">✓ 任务</button>
+    <button type="button" data-action="task" title="切换完成状态">✓ 完成</button>
     <button type="button" class="color" data-color="#ef9a9a" style="background:#ef9a9a" title="红色"></button>
     <button type="button" class="color" data-color="#90caf9" style="background:#90caf9" title="蓝色"></button>
     <button type="button" class="color" data-color="#80cbc4" style="background:#80cbc4" title="绿色"></button>

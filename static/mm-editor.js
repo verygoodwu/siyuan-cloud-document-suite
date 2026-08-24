@@ -5,6 +5,7 @@ const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
 const status = document.querySelector("#status");
 const exportButton = document.querySelector("#export");
+const viewStyleButton = document.querySelector("#view-style");
 const nodeTools = document.querySelector("#node-tools");
 const storageKey = `siyuan-mm-editor:${asset}`;
 const store = new SiyuanFileStore(asset, storageKey);
@@ -177,7 +178,35 @@ function updateToolbar(mind) {
   nodeTools.querySelector('[data-action="bold"]').classList.toggle("active", node.style?.fontWeight === "700" || node.style?.fontWeight === "bold");
   nodeTools.querySelector('[data-action="italic"]').classList.toggle("active", node.style?.fontStyle === "italic");
   nodeTools.querySelector('[data-action="underline"]').classList.toggle("active", node.style?.textDecoration?.includes("underline"));
-  nodeTools.querySelector('[data-action="task"]').classList.toggle("active", Boolean(node.metadata?.task?.enabled));
+  nodeTools.querySelector('[data-action="task"]').classList.toggle("active", Boolean(node.metadata?.task?.done));
+}
+
+function isHierarchyView(mind) {
+  return mind.getData().nodeData.metadata?.cloudViewStyle === "hierarchy";
+}
+
+function updateViewStyle(mind, fit = false) {
+  const enabled = isHierarchyView(mind);
+  document.body.classList.toggle("hierarchy-view", enabled);
+  viewStyleButton.classList.toggle("active", enabled);
+  viewStyleButton.setAttribute("aria-pressed", String(enabled));
+  viewStyleButton.textContent = enabled ? "彩色样式" : "层级样式";
+  if (fit) requestAnimationFrame(() => {
+    mind.scaleFit();
+    mind.toCenter();
+  });
+}
+
+function nodeDepth(node) {
+  let depth = 0;
+  let current = node;
+  const visited = new Set();
+  while (current?.parent && !visited.has(current)) {
+    visited.add(current);
+    current = current.parent;
+    depth += 1;
+  }
+  return depth;
 }
 
 function decorateNodes(mind) {
@@ -199,34 +228,11 @@ function decorateNodes(mind) {
       });
       topic.appendChild(add);
     }
-    const task = node.metadata?.task;
-    let checkbox = topic.querySelector(":scope > .task-box");
-    if (task?.enabled && !checkbox) {
-      checkbox = document.createElement("button");
-      checkbox.type = "button";
-      checkbox.className = "task-box";
-      checkbox.title = "切换完成状态";
-      checkbox.addEventListener("pointerdown", (event) => event.stopPropagation());
-      checkbox.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const current = topic.nodeObj.metadata?.task;
-        await mind.reshapeNode(topic, {
-          metadata: { ...topic.nodeObj.metadata, task: { enabled: true, done: !current?.done } }
-        });
-      });
-      topic.insertBefore(checkbox, topic.firstChild);
-    } else if (!task?.enabled && checkbox) {
-      checkbox.remove();
-      checkbox = null;
-    }
-    if (checkbox) {
-      checkbox.classList.toggle("done", Boolean(task.done));
-      const mark = task.done ? "✓" : "";
-      if (checkbox.textContent !== mark) checkbox.textContent = mark;
-    }
-    topic.classList.toggle("task-done", Boolean(task?.done));
+    topic.querySelector(":scope > .task-box")?.remove();
+    topic.dataset.depth = String(nodeDepth(node));
+    topic.classList.toggle("task-done", Boolean(node.metadata?.task?.done));
   }
+  updateViewStyle(mind);
   updateToolbar(mind);
 }
 
@@ -245,8 +251,8 @@ async function applyToolbarAction(mind, button) {
   }
   const patch = { style };
   if (action === "task") {
-    const enabled = !node.metadata?.task?.enabled;
-    patch.metadata = { ...node.metadata, task: { enabled, done: false } };
+    const done = !node.metadata?.task?.done;
+    patch.metadata = { ...node.metadata, task: { enabled: done, done } };
   }
   await mind.reshapeNode(topic, patch);
 }
@@ -257,6 +263,11 @@ function serializeMm(mind) {
     ? sourceDocument.cloneNode(true)
     : new DOMParser().parseFromString('<map version="1.0.1"/>', "application/xml");
   const map = documentNode.documentElement;
+  setAttribute(
+    map,
+    "CLOUD_VIEW_STYLE",
+    data.nodeData.metadata?.cloudViewStyle === "hierarchy" ? "hierarchy" : null
+  );
   const sourceById = new Map(
     Array.from(map.getElementsByTagName("node"))
       .filter((element) => element.getAttribute("ID"))
@@ -292,7 +303,11 @@ function parseMm(bytes) {
     .find((child) => child.localName.toLowerCase() === "node");
   if (!root) throw new Error("未找到脑图根节点");
   sourceDocument = xml;
-  return { nodeData: convertNode(root, 1, true), direction: 2 };
+  const nodeData = convertNode(root, 1, true);
+  if (xml.documentElement.getAttribute("CLOUD_VIEW_STYLE") === "hierarchy") {
+    nodeData.metadata = { ...nodeData.metadata, cloudViewStyle: "hierarchy" };
+  }
+  return { nodeData, direction: 2 };
 }
 
 async function loadInitialData() {
@@ -393,6 +408,15 @@ try {
   nodeTools.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
     if (button) await applyToolbarAction(mind, button);
+  });
+  viewStyleButton.addEventListener("click", async () => {
+    const rootTopic = document.querySelector("me-root > me-tpc");
+    if (!rootTopic) return;
+    const metadata = { ...(rootTopic.nodeObj.metadata || {}) };
+    if (metadata.cloudViewStyle === "hierarchy") delete metadata.cloudViewStyle;
+    else metadata.cloudViewStyle = "hierarchy";
+    await mind.reshapeNode(rootTopic, { metadata });
+    updateViewStyle(mind, true);
   });
   const observer = new MutationObserver(() => decorateNodes(mind));
   observer.observe(document.querySelector("#map"), { childList: true, subtree: true });
