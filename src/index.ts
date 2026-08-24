@@ -5,6 +5,9 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
 
+declare const __PLUGIN_VERSION__: string;
+const PLUGIN_VERSION = __PLUGIN_VERSION__;
+
 interface KernelResponse<T> {
   code: number;
   msg: string;
@@ -26,6 +29,7 @@ const EDITOR_SELECTOR = ".protyle-wysiwyg";
 const BLOCK_SELECTOR = "[data-node-id]";
 const TREE_DOCUMENT_SELECTOR = ".b3-list-item[data-node-id]";
 const FILE_TREE_SELECTOR = ".sy__file";
+const EMBED_STYLE = "width: 100%; border: 0; border-radius: 0; background: transparent; display: block;";
 
 interface DropTarget {
   id: string;
@@ -621,8 +625,8 @@ class DropImporterPlugin extends Plugin {
       (child) => child.localName.toLowerCase() === "node"
     );
     if (!root) throw new Error("FreeMind root node not found");
-    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="width: 100%; height: 720px; min-height: 560px; border: 1px solid var(--b3-border-color); border-radius: 8px;" frameborder="0"></iframe>`;
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: 720px; min-height: 560px;" frameborder="0"></iframe>`;
   }
 
   private parseFreeMindNode(
@@ -929,8 +933,8 @@ class DropImporterPlugin extends Plugin {
   private buildSpreadsheetPreviewMarkdown(
     asset: UploadedAsset
   ): string {
-    const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="width: 100%; height: 760px; min-height: 600px; border: 1px solid var(--b3-border-color); border-radius: 8px;" frameborder="0"></iframe>`;
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: 760px; min-height: 600px;" frameborder="0"></iframe>`;
   }
 
   private escapeMarkdownHeading(value: string): string {
@@ -941,7 +945,7 @@ class DropImporterPlugin extends Plugin {
     const attachment = this.buildAttachmentMarkdown([asset]);
     const source = `/${asset.assetPath}`;
     const escapedSource = this.escapeHtmlAttribute(source);
-    return `<iframe src="${escapedSource}" data-src="${escapedSource}" style="width: 100%; height: 78vh; min-height: 640px; border: 1px solid var(--b3-border-color); border-radius: 6px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${attachment}`;
+    return `<iframe src="${escapedSource}" data-src="${escapedSource}" style="${EMBED_STYLE} height: 78vh; min-height: 640px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${attachment}`;
   }
 
   private escapeHtmlAttribute(value: string): string {

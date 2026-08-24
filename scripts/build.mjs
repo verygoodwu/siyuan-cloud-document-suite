@@ -1,5 +1,8 @@
 import { build } from "esbuild";
 import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+
+const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 
 await build({
   absWorkingDir: process.cwd(),
@@ -11,5 +14,8 @@ await build({
   target: "chrome120",
   external: ["siyuan"],
   minify: false,
-  sourcemap: false
+  sourcemap: false,
+  define: {
+    __PLUGIN_VERSION__: JSON.stringify(packageJson.version)
+  }
 });
