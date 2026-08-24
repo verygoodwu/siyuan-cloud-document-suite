@@ -1,0 +1,24 @@
+{
+  "name": "siyuan-cloud-document-suite",
+  "author": "verygoodwu",
+  "url": "https://github.com/verygoodwu/siyuan-cloud-document-suite",
+  "version": "1.4.0",
+  "minAppVersion": "3.7.4",
+  "kernels": ["windows"],
+  "backends": ["windows"],
+  "frontends": ["desktop", "desktop-window"],
+  "disabledInPublish": true,
+  "displayName": {
+    "default": "Cloud Document Suite",
+    "zh-CN": "云文档套件"
+  },
+  "description": {
+    "default": "Import, create, edit, preview, and export office documents and mind maps in SiYuan.",
+    "zh-CN": "在思源中导入、创建、编辑、预览和导出办公文档与脑图。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "keywords": ["document", "office", "excel", "word", "pdf", "mindmap", "云文档", "办公套件", "拖放"]
+}

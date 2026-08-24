@@ -1,0 +1,31 @@
+import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import JSZip from "jszip";
+
+await mkdir("dist", { recursive: true });
+await Promise.all([
+  copyFile("plugin.json", "dist/plugin.json"),
+  copyFile("README.md", "dist/README.md"),
+  copyFile("README.zh-CN.md", "dist/README.zh-CN.md"),
+  copyFile("LICENSE", "dist/LICENSE"),
+  copyFile("icon.png", "dist/icon.png"),
+  copyFile("preview.png", "dist/preview.png")
+  ,copyFile("static/mm-editor.html", "dist/mm-editor.html")
+  ,copyFile("static/mm-editor.js", "dist/mm-editor.js")
+  ,copyFile("node_modules/mind-elixir/dist/MindElixir.js", "dist/MindElixir.js")
+  ,copyFile("node_modules/mind-elixir/dist/MindElixir.css", "dist/MindElixir.css")
+  ,copyFile("static/sheet-editor.html", "dist/sheet-editor.html")
+  ,copyFile("static/sheet-editor.js", "dist/sheet-editor.js")
+  ,copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
+]);
+
+const zip = new JSZip();
+for (const entry of await readdir("dist", { withFileTypes: true })) {
+  if (entry.isFile() && entry.name !== "package.zip") {
+    zip.file(entry.name, await readFile(`dist/${entry.name}`));
+  }
+}
+await writeFile("package.zip", await zip.generateAsync({
+  type: "nodebuffer",
+  compression: "DEFLATE",
+  compressionOptions: { level: 9 }
+}));

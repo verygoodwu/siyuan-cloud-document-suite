@@ -1,0 +1,1110 @@
+import { Plugin, showMessage } from "siyuan";
+import * as XLSX from "xlsx";
+import * as mammoth from "mammoth";
+import TurndownService from "turndown";
+import { gfm } from "turndown-plugin-gfm";
+import JSZip from "jszip";
+
+interface KernelResponse<T> {
+  code: number;
+  msg: string;
+  data: T;
+}
+
+interface AssetUploadData {
+  errFiles: string[];
+  succMap: Record<string, string>;
+}
+
+interface UploadedAsset {
+  originalName: string;
+  assetPath: string;
+  documentMarkdown?: string;
+}
+
+const EDITOR_SELECTOR = ".protyle-wysiwyg";
+const BLOCK_SELECTOR = "[data-node-id]";
+const TREE_DOCUMENT_SELECTOR = ".b3-list-item[data-node-id]";
+const FILE_TREE_SELECTOR = ".sy__file";
+
+interface DropTarget {
+  id: string;
+  position: "after-block" | "create-child-documents" | "create-root-documents";
+}
+
+interface DocumentPathData {
+  notebook: string;
+  path: string;
+}
+
+interface MindMapNode {
+  text: string;
+  style: string;
+  position: "left" | "right";
+  folded: boolean;
+  children: MindMapNode[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface DocTreeMenuDetail {
+  menu: { addItem(item: { icon?: string; label: string; click: () => void | Promise<void> }): void };
+  type: "doc" | "docs" | "notebook" | "notebooks" | "items";
+  items: { id: string; path: string }[];
+}
+
+class DropImporterPlugin extends Plugin {
+  private dragDepth = 0;
+  private overlay: HTMLDivElement | null = null;
+  private toastTimer: number | null = null;
+  private boundTrees = new Set<HTMLElement>();
+  private treeObserver: MutationObserver | null = null;
+  private debug: Record<string, unknown> = {};
+
+  public onload(): void {
+    // Window capture runs before SiYuan's editor handlers, so the plugin can
+    // reliably take ownership of external file drops.
+    window.addEventListener("dragenter", this.onDragEnter, true);
+    window.addEventListener("dragleave", this.onDragLeave, true);
+    window.addEventListener("dragover", this.onDragOver, true);
+    window.addEventListener("drop", this.onDrop, true);
+    this.eventBus.on("open-menu-doctree", this.onOpenDocTreeMenu);
+    void this.recordDebug("onload");
+    showMessage("云文档套件已启动", 3000, "info");
+  }
+
+  public onLayoutReady(): void {
+    this.bindFileTrees();
+    this.treeObserver = new MutationObserver(() => this.bindFileTrees());
+    this.treeObserver.observe(document.body, { childList: true, subtree: true });
+    void this.recordDebug("layout-ready", { treeCount: this.boundTrees.size });
+  }
+
+  public onunload(): void {
+    window.removeEventListener("dragenter", this.onDragEnter, true);
+    window.removeEventListener("dragleave", this.onDragLeave, true);
+    window.removeEventListener("dragover", this.onDragOver, true);
+    window.removeEventListener("drop", this.onDrop, true);
+    this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
+    this.treeObserver?.disconnect();
+    this.treeObserver = null;
+    for (const tree of this.boundTrees) {
+      tree.removeEventListener("dragenter", this.onTreeDragEnter, true);
+      tree.removeEventListener("dragover", this.onTreeDragOver, true);
+      tree.removeEventListener("drop", this.onTreeDrop, true);
+    }
+    this.boundTrees.clear();
+    this.removeOverlay();
+
+    if (this.toastTimer !== null) {
+      window.clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
+  }
+
+  private readonly onOpenDocTreeMenu = (
+    event: CustomEvent<DocTreeMenuDetail>
+  ): void => {
+    const { menu, type, items } = event.detail;
+    if (items.length !== 1 || (type !== "doc" && type !== "notebook")) return;
+    const target = items[0];
+    menu.addItem({
+      icon: "iconGraph",
+      label: "新建脑图（.mm）",
+      click: async () => {
+        await this.createNewMindMap(type, target.id);
+      }
+    });
+    menu.addItem({
+      icon: "iconFile",
+      label: "新建 Word 文档",
+      click: async () => {
+        await this.createNewWordDocument(type, target.id);
+      }
+    });
+    menu.addItem({
+      icon: "iconTable",
+      label: "新建 Excel 工作簿",
+      click: async () => {
+        await this.createNewSpreadsheet(type, target.id);
+      }
+    });
+  };
+
+  private async createNewMindMap(
+    type: "doc" | "notebook",
+    targetId: string
+  ): Promise<void> {
+    this.showToast("正在创建脑图…");
+    try {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
+      const asset = await this.uploadAsset(
+        new File([xml], "新建脑图.mm", { type: "application/xml" })
+      );
+      asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(asset, xml);
+      if (type === "notebook") {
+        await this.createRootDocuments(targetId, [asset]);
+      } else {
+        await this.createChildDocuments(targetId, [asset]);
+      }
+      this.showToast("脑图已创建");
+      await this.recordDebug("mindmap-created", { type, targetId, asset });
+    } catch (error) {
+      console.error("[Drop Importer] Cannot create mind map", error);
+      this.showToast("脑图创建失败，请查看诊断信息", true);
+      await this.recordDebug("mindmap-create-failed", {
+        type,
+        targetId,
+        reason: String(error)
+      });
+    }
+  }
+
+  private async createNewWordDocument(
+    type: "doc" | "notebook",
+    targetId: string
+  ): Promise<void> {
+    this.showToast("正在创建 Word 文档…");
+    try {
+      let notebook: string;
+      let parentHPath: string;
+      if (type === "notebook") {
+        notebook = targetId;
+        parentHPath = "/";
+      } else {
+        const [pathData, hPath] = await Promise.all([
+          this.postJson<DocumentPathData>("/api/filetree/getPathByID", {
+            id: targetId
+          }),
+          this.postJson<string>("/api/filetree/getHPathByID", { id: targetId })
+        ]);
+        notebook = pathData.notebook;
+        parentHPath = hPath;
+      }
+      const path = await this.findAvailableChildPath(
+        notebook,
+        parentHPath,
+        "新建 Word 文档"
+      );
+      await this.postJson<string>("/api/filetree/createDocWithMd", {
+        notebook,
+        path,
+        markdown: ""
+      });
+      this.showToast("Word 文档已创建，可编辑后通过“导出 → Word .docx”导出");
+      await this.recordDebug("word-document-created", { type, targetId, path });
+    } catch (error) {
+      console.error("[Drop Importer] Cannot create Word document", error);
+      this.showToast("Word 文档创建失败，请查看诊断信息", true);
+      await this.recordDebug("word-document-create-failed", {
+        type,
+        targetId,
+        reason: String(error)
+      });
+    }
+  }
+
+  private async createNewSpreadsheet(
+    type: "doc" | "notebook",
+    targetId: string
+  ): Promise<void> {
+    this.showToast("正在创建 Excel 工作簿…");
+    try {
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.aoa_to_sheet([[""]]),
+        "Sheet1"
+      );
+      const content = XLSX.write(workbook, {
+        bookType: "xlsx",
+        type: "array"
+      }) as ArrayBuffer;
+      const asset = await this.uploadAsset(
+        new File([content], "新建 Excel 工作簿.xlsx", {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        })
+      );
+      asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
+      if (type === "notebook") {
+        await this.createRootDocuments(targetId, [asset]);
+      } else {
+        await this.createChildDocuments(targetId, [asset]);
+      }
+      this.showToast("Excel 工作簿已创建");
+      await this.recordDebug("spreadsheet-created", { type, targetId, asset });
+    } catch (error) {
+      console.error("[Drop Importer] Cannot create spreadsheet", error);
+      this.showToast("Excel 工作簿创建失败，请查看诊断信息", true);
+      await this.recordDebug("spreadsheet-create-failed", {
+        type,
+        targetId,
+        reason: String(error)
+      });
+    }
+  }
+
+  private bindFileTrees(): void {
+    let added = 0;
+    for (const tree of document.querySelectorAll<HTMLElement>(FILE_TREE_SELECTOR)) {
+      if (this.boundTrees.has(tree)) continue;
+      tree.addEventListener("dragenter", this.onTreeDragEnter, true);
+      tree.addEventListener("dragover", this.onTreeDragOver, true);
+      tree.addEventListener("drop", this.onTreeDrop, true);
+      this.boundTrees.add(tree);
+      added += 1;
+    }
+    if (added > 0) {
+      void this.recordDebug("tree-bound", { added, treeCount: this.boundTrees.size });
+    }
+  }
+
+  private readonly onTreeDragEnter = (event: DragEvent): void => {
+    if (!this.isFileDrag(event)) return;
+    const target = this.findTreeDropTarget(event);
+    void this.recordDebug("tree-dragenter", this.describeDrop(event, target));
+    if (!target) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.dragDepth = 1;
+    this.showOverlay();
+  };
+
+  private readonly onTreeDragOver = (event: DragEvent): void => {
+    if (!this.isFileDrag(event) || !this.findTreeDropTarget(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  };
+
+  private readonly onTreeDrop = (event: DragEvent): void => {
+    if (!this.isFileDrag(event)) return;
+    const target = this.findTreeDropTarget(event);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    void this.recordDebug("tree-drop", this.describeDrop(event, target, files));
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.dragDepth = 0;
+    this.removeOverlay();
+    if (!target) {
+      this.showToast("没有识别到目标文档，请将鼠标放在文档名称上", true);
+      return;
+    }
+    if (files.length === 0) {
+      this.showToast("已收到拖放事件，但没有读取到文件", true);
+      return;
+    }
+    void this.importFiles(files, target);
+  };
+
+  private readonly onDragEnter = (event: DragEvent): void => {
+    if (!this.isFileDrag(event) || !this.isSupportedPoint(event)) {
+      return;
+    }
+
+    this.dragDepth += 1;
+    this.showOverlay();
+  };
+
+  private readonly onDragLeave = (event: DragEvent): void => {
+    if (!this.isFileDrag(event)) {
+      return;
+    }
+
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+    if (this.dragDepth === 0) {
+      this.removeOverlay();
+    }
+  };
+
+  private readonly onDragOver = (event: DragEvent): void => {
+    if (!this.isFileDrag(event) || !this.isSupportedPoint(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  private readonly onDrop = (event: DragEvent): void => {
+    this.dragDepth = 0;
+    this.removeOverlay();
+
+    if (!this.isFileDrag(event) || !this.isSupportedPoint(event)) {
+      return;
+    }
+
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+
+    const dropTarget = this.findDropTarget(event);
+    if (!dropTarget) {
+      this.showToast("请把文件放到内容块或文档树中的文档上", true);
+      return;
+    }
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void this.importFiles(files, dropTarget);
+  };
+
+  private async importFiles(files: File[], dropTarget: DropTarget): Promise<void> {
+    await this.recordDebug("import-start", { fileNames: files.map((file) => file.name), dropTarget });
+    this.showToast(`正在导入 ${files.length} 个文件…`);
+    const uploaded: UploadedAsset[] = [];
+
+    for (const file of files) {
+      try {
+        const asset = await this.uploadAsset(file);
+        try {
+          if (this.isMarkdownFile(file.name)) {
+            asset.documentMarkdown = await file.text();
+          } else if (/\.xmd$/i.test(file.name)) {
+            const content = await file.arrayBuffer();
+            asset.documentMarkdown = this.isZipContent(content)
+              ? await this.buildXMindPreviewMarkdown(asset, content)
+              : new TextDecoder().decode(content);
+          } else if (this.isPdfFile(file.name)) {
+            asset.documentMarkdown = this.buildPdfPreviewMarkdown(asset);
+          } else if (this.isSpreadsheetFile(file.name)) {
+            asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
+          } else if (this.isWordFile(file.name)) {
+            asset.documentMarkdown = await this.buildWordPreviewMarkdown(
+              asset,
+              await file.arrayBuffer()
+            );
+          } else if (this.isXMindFile(file.name)) {
+            asset.documentMarkdown = await this.buildXMindPreviewMarkdown(
+              asset,
+              await file.arrayBuffer()
+            );
+          } else if (this.isFreeMindFile(file.name)) {
+            asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(
+              asset,
+              await file.text()
+            );
+          }
+        } catch (previewError) {
+          console.error("[Drop Importer] Preview generation failed", previewError);
+          await this.recordDebug("preview-failed", {
+            fileName: file.name,
+            reason: String(previewError)
+          });
+        }
+        uploaded.push(asset);
+      } catch (error) {
+        console.error("[Drop Importer] Asset upload failed", error);
+      }
+    }
+
+    if (uploaded.length === 0) {
+      await this.recordDebug("import-failed", { reason: "no-assets-uploaded" });
+      this.showToast("文件导入失败，请查看开发者控制台", true);
+      return;
+    }
+
+    try {
+      if (dropTarget.position === "create-child-documents") {
+        await this.createChildDocuments(dropTarget.id, uploaded);
+      } else if (dropTarget.position === "create-root-documents") {
+        await this.createRootDocuments(dropTarget.id, uploaded);
+      } else {
+        await this.insertAttachmentBlock(dropTarget, uploaded);
+      }
+    } catch (error) {
+      console.error("[Drop Importer] Attachment insertion failed", error);
+      this.showToast("文件已上传，但附件链接插入失败", true);
+      await this.recordDebug("import-failed", { reason: String(error) });
+      return;
+    }
+
+    const failedCount = files.length - uploaded.length;
+    this.showToast(
+      failedCount === 0
+        ? `已导入 ${uploaded.length} 个文件`
+        : `已导入 ${uploaded.length} 个文件，${failedCount} 个失败`,
+      failedCount > 0
+    );
+    await this.recordDebug("import-complete", { uploaded, failedCount });
+  }
+
+  private async uploadAsset(file: File): Promise<UploadedAsset> {
+    const form = new FormData();
+    form.append("assetsDirPath", "/assets/");
+    form.append("file[]", file, file.name);
+
+    const response = await fetch("/api/asset/upload", {
+      method: "POST",
+      body: form
+    });
+
+    if (!response.ok) {
+      throw new Error(`Upload request failed with HTTP ${response.status}`);
+    }
+
+    const result = (await response.json()) as KernelResponse<AssetUploadData>;
+    const assetPath = result.data?.succMap?.[file.name];
+    if (result.code !== 0 || !assetPath) {
+      throw new Error(result.msg || "The kernel did not return an asset path");
+    }
+
+    return { originalName: file.name, assetPath };
+  }
+
+  private async insertAttachmentBlock(
+    target: DropTarget,
+    assets: UploadedAsset[]
+  ): Promise<void> {
+    const markdown = this.buildAttachmentMarkdown(assets);
+    const response = await fetch("/api/block/insertBlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataType: "markdown",
+        data: markdown,
+        previousID: target.id
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Insert request failed with HTTP ${response.status}`);
+    }
+
+    const result = (await response.json()) as KernelResponse<unknown>;
+    if (result.code !== 0) {
+      throw new Error(result.msg || "The kernel rejected the block insertion");
+    }
+  }
+
+  private async createChildDocuments(
+    parentDocumentId: string,
+    assets: UploadedAsset[]
+  ): Promise<void> {
+    const [pathData, parentHPath] = await Promise.all([
+      this.postJson<DocumentPathData>("/api/filetree/getPathByID", {
+        id: parentDocumentId
+      }),
+      this.postJson<string>("/api/filetree/getHPathByID", {
+        id: parentDocumentId
+      })
+    ]);
+
+    for (const asset of assets) {
+      const childPath = await this.findAvailableChildPath(
+        pathData.notebook,
+        parentHPath,
+        asset.originalName
+      );
+      await this.postJson<string>("/api/filetree/createDocWithMd", {
+        notebook: pathData.notebook,
+        path: childPath,
+        markdown: asset.documentMarkdown?.trim()
+          ? asset.documentMarkdown
+          : this.buildAttachmentMarkdown([asset])
+      });
+    }
+  }
+
+  private async createRootDocuments(
+    notebook: string,
+    assets: UploadedAsset[]
+  ): Promise<void> {
+    for (const asset of assets) {
+      const path = await this.findAvailableChildPath(
+        notebook,
+        "/",
+        asset.originalName
+      );
+      await this.postJson<string>("/api/filetree/createDocWithMd", {
+        notebook,
+        path,
+        markdown: asset.documentMarkdown?.trim()
+          ? asset.documentMarkdown
+          : this.buildAttachmentMarkdown([asset])
+      });
+    }
+  }
+
+  private async findAvailableChildPath(
+    notebook: string,
+    parentHPath: string,
+    fileName: string
+  ): Promise<string> {
+    const dotIndex = fileName.lastIndexOf(".");
+    const stem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : "";
+    const parent = parentHPath === "/" ? "" : parentHPath.replace(/\/$/, "");
+
+    for (let index = 1; index <= 100; index += 1) {
+      const title =
+        index === 1 ? fileName : `${stem} (${index})${extension}`;
+      const path = `${parent}/${title}`;
+      const ids = await this.postJson<string[]>("/api/filetree/getIDsByHPath", {
+        notebook,
+        path
+      });
+      if (!ids || ids.length === 0) {
+        return path;
+      }
+    }
+
+    throw new Error("Unable to find an unused child document name");
+  }
+
+  private async postJson<T>(endpoint: string, body: unknown): Promise<T> {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      throw new Error(`${endpoint} failed with HTTP ${response.status}`);
+    }
+
+    const result = (await response.json()) as KernelResponse<T>;
+    if (result.code !== 0) {
+      throw new Error(result.msg || `${endpoint} was rejected by the kernel`);
+    }
+    return result.data;
+  }
+
+  private buildAttachmentMarkdown(assets: UploadedAsset[]): string {
+    return assets
+      .map(({ originalName, assetPath }) => {
+        const label = this.escapeMarkdownLabel(originalName);
+        const destination = assetPath.replace(/</g, "%3C").replace(/>/g, "%3E");
+        return `[${label}](<${destination}>)`;
+      })
+      .join("  \n");
+  }
+
+  private isMarkdownFile(fileName: string): boolean {
+    return /\.(?:md|markdown)$/i.test(fileName);
+  }
+
+  private isPdfFile(fileName: string): boolean {
+    return /\.pdf$/i.test(fileName);
+  }
+
+  private isSpreadsheetFile(fileName: string): boolean {
+    return /\.(?:xlsx|xls|xlsm|xlsb|csv)$/i.test(fileName);
+  }
+
+  private isWordFile(fileName: string): boolean {
+    return /\.docx$/i.test(fileName);
+  }
+
+  private isXMindFile(fileName: string): boolean {
+    return /\.xmind$/i.test(fileName);
+  }
+
+  private isFreeMindFile(fileName: string): boolean {
+    return /\.mm$/i.test(fileName);
+  }
+
+  private async buildFreeMindPreviewMarkdown(
+    asset: UploadedAsset,
+    xml: string
+  ): Promise<string> {
+    const documentNode = new DOMParser().parseFromString(xml, "application/xml");
+    if (documentNode.querySelector("parsererror")) {
+      throw new Error("Invalid FreeMind .mm XML");
+    }
+    const map = documentNode.documentElement;
+    const root = Array.from(map.children).find(
+      (child) => child.localName.toLowerCase() === "node"
+    );
+    if (!root) throw new Error("FreeMind root node not found");
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="width: 100%; height: 720px; min-height: 560px; border: 1px solid var(--b3-border-color); border-radius: 8px;" frameborder="0"></iframe>`;
+  }
+
+  private parseFreeMindNode(
+    element: Element,
+    inheritedPosition: "left" | "right"
+  ): MindMapNode {
+    const position = element.getAttribute("POSITION")?.toLowerCase() === "left"
+      ? "left"
+      : element.getAttribute("POSITION")?.toLowerCase() === "right"
+        ? "right"
+        : inheritedPosition;
+    const text =
+      element.getAttribute("TEXT")?.trim() ||
+      element.querySelector(":scope > richcontent[type='NODE']")?.textContent?.trim() ||
+      "未命名主题";
+    const children = Array.from(element.children)
+      .filter((child) => child.localName.toLowerCase() === "node")
+      .map((child) => this.parseFreeMindNode(child, position));
+    return {
+      text,
+      style: element.getAttribute("STYLE") ?? "",
+      position,
+      folded: element.getAttribute("FOLDED")?.toLowerCase() === "true",
+      children,
+      x: 0,
+      y: 0,
+      width: Math.min(430, Math.max(120, Array.from(text).length * 15 + 34)),
+      height: 46
+    };
+  }
+
+  private renderFreeMindSvg(root: MindMapNode): string {
+    let nextY = 42;
+    const place = (
+      node: MindMapNode,
+      side: "left" | "right",
+      parentEdgeX: number
+    ): void => {
+      node.position = side;
+      node.x = side === "right"
+        ? parentEdgeX + 70
+        : parentEdgeX - 70 - node.width;
+      const visibleChildren = node.folded ? [] : node.children;
+      if (visibleChildren.length === 0) {
+        node.y = nextY;
+        nextY += 76;
+        return;
+      }
+      const childEdge = side === "right" ? node.x + node.width : node.x;
+      for (const child of visibleChildren) place(child, side, childEdge);
+      node.y = (
+        visibleChildren[0].y + visibleChildren[visibleChildren.length - 1].y
+      ) / 2;
+    };
+
+    const left = root.children.filter((child) => child.position === "left");
+    const right = root.children.filter((child) => child.position !== "left");
+    root.x = 0;
+    for (const child of left) place(child, "left", root.x);
+    for (const child of right) place(child, "right", root.x + root.width);
+    const visibleTop = [...left, ...right];
+    root.y = visibleTop.length
+      ? (Math.min(...visibleTop.map((node) => node.y)) +
+          Math.max(...visibleTop.map((node) => node.y))) /
+        2
+      : nextY;
+
+    const nodes: MindMapNode[] = [];
+    const collect = (node: MindMapNode): void => {
+      nodes.push(node);
+      if (!node.folded) node.children.forEach(collect);
+    };
+    collect(root);
+    const minX = Math.min(...nodes.map((node) => node.x)) - 60;
+    const maxX = Math.max(...nodes.map((node) => node.x + node.width)) + 60;
+    const maxY = Math.max(...nodes.map((node) => node.y + node.height)) + 42;
+    const shiftX = -minX;
+    const edges: string[] = [];
+    const cards: string[] = [];
+
+    const draw = (node: MindMapNode, depth: number): void => {
+      const x = node.x + shiftX;
+      const y = node.y;
+      const isRoot = node === root;
+      const hasChildren = node.children.length > 0;
+      const fill = isRoot ? "#3f73f1" : hasChildren || node.style === "bubble" ? "#f0f1f3" : "#ffffff";
+      const color = isRoot ? "#ffffff" : "#252a32";
+      const weight = isRoot || hasChildren ? "700" : "400";
+      cards.push(
+        `<g><rect x="${x}" y="${y}" width="${node.width}" height="${node.height}" rx="8" fill="${fill}"${isRoot ? ' filter="url(#shadow)"' : ""}/><text x="${x + 16}" y="${y + 29}" font-size="16" font-weight="${weight}" fill="${color}">${this.escapeXml(node.text)}</text>${node.folded && node.children.length ? `<circle cx="${x + node.width + 17}" cy="${y + 23}" r="11" fill="#fff" stroke="#4d7cff"/><text x="${x + node.width + 17}" y="${y + 28}" text-anchor="middle" font-size="12" fill="#4d7cff">${node.children.length}</text>` : ""}</g>`
+      );
+      if (node.folded) return;
+      for (const child of node.children) {
+        const childX = child.x + shiftX;
+        const fromX = child.position === "left" ? x : x + node.width;
+        const toX = child.position === "left" ? childX + child.width : childX;
+        const fromY = y + node.height / 2;
+        const toY = child.y + child.height / 2;
+        const bend = (fromX + toX) / 2;
+        edges.push(`<path d="M ${fromX} ${fromY} C ${bend} ${fromY}, ${bend} ${toY}, ${toX} ${toY}" fill="none" stroke="#4d7cff" stroke-width="2"/>`);
+        draw(child, depth + 1);
+      }
+    };
+    draw(root, 0);
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(maxX - minX)}" height="${Math.ceil(maxY)}" viewBox="0 0 ${Math.ceil(maxX - minX)} ${Math.ceil(maxY)}"><defs><filter id="shadow" x="-20%" y="-30%" width="140%" height="170%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#315fce" flood-opacity=".25"/></filter></defs><rect width="100%" height="100%" fill="#ffffff"/>${edges.join("")}${cards.join("")}</svg>`;
+  }
+
+  private escapeXml(value: string): string {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  private isZipContent(content: ArrayBuffer): boolean {
+    const bytes = new Uint8Array(content, 0, Math.min(4, content.byteLength));
+    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+  }
+
+  private async buildXMindPreviewMarkdown(
+    asset: UploadedAsset,
+    content: ArrayBuffer
+  ): Promise<string> {
+    if (content.byteLength > 100 * 1024 * 1024) {
+      throw new Error("XMind file exceeds the 100 MB preview limit");
+    }
+    const zip = await JSZip.loadAsync(content);
+    let outline = "";
+    const jsonEntry = zip.file("content.json");
+    if (jsonEntry) {
+      outline = this.convertXMindJson(
+        JSON.parse(await jsonEntry.async("string")) as unknown
+      );
+    } else {
+      const xmlEntry = zip.file("content.xml");
+      if (!xmlEntry) throw new Error("XMind content.json/content.xml not found");
+      outline = this.convertXMindXml(await xmlEntry.async("string"));
+    }
+    const attachment = this.buildAttachmentMarkdown([asset]);
+    return `${outline.trim() || "该 XMind 文件没有可显示的主题。"}\n\n---\n\n### 附件\n\n📎 ${attachment}`;
+  }
+
+  private convertXMindJson(value: unknown): string {
+    const sheets = Array.isArray(value) ? value : [value];
+    const sections: string[] = [];
+    for (const rawSheet of sheets) {
+      if (!rawSheet || typeof rawSheet !== "object") continue;
+      const sheet = rawSheet as Record<string, unknown>;
+      const title = typeof sheet.title === "string" ? sheet.title : "工作表";
+      const root = sheet.rootTopic;
+      if (!root || typeof root !== "object") continue;
+      sections.push(`## ${this.escapeMarkdownHeading(title)}\n\n${this.xMindJsonTopic(root as Record<string, unknown>, 0)}`);
+    }
+    return sections.join("\n\n");
+  }
+
+  private xMindJsonTopic(topic: Record<string, unknown>, depth: number): string {
+    const title = typeof topic.title === "string" ? topic.title : "未命名主题";
+    const lines = [`${"  ".repeat(depth)}- ${this.escapeMarkdownLabel(title)}`];
+    const children = topic.children;
+    if (children && typeof children === "object") {
+      const groups = Object.values(children as Record<string, unknown>);
+      for (const group of groups) {
+        if (!Array.isArray(group)) continue;
+        for (const child of group) {
+          if (child && typeof child === "object") {
+            lines.push(this.xMindJsonTopic(child as Record<string, unknown>, depth + 1));
+          }
+        }
+      }
+    }
+    return lines.join("\n");
+  }
+
+  private convertXMindXml(xml: string): string {
+    const documentNode = new DOMParser().parseFromString(xml, "application/xml");
+    if (documentNode.querySelector("parsererror")) {
+      throw new Error("Invalid XMind content.xml");
+    }
+    const sections: string[] = [];
+    const sheets = Array.from(documentNode.getElementsByTagName("sheet"));
+    for (const sheet of sheets) {
+      const sheetTitle = this.directChildText(sheet, "title") || "工作表";
+      const root = Array.from(sheet.children).find(
+        (child) => child.localName === "topic"
+      );
+      if (root) {
+        sections.push(`## ${this.escapeMarkdownHeading(sheetTitle)}\n\n${this.xMindXmlTopic(root, 0)}`);
+      }
+    }
+    return sections.join("\n\n");
+  }
+
+  private xMindXmlTopic(topic: Element, depth: number): string {
+    const title = this.directChildText(topic, "title") || "未命名主题";
+    const lines = [`${"  ".repeat(depth)}- ${this.escapeMarkdownLabel(title)}`];
+    for (const child of Array.from(topic.getElementsByTagName("topic"))) {
+      const nearestParentTopic = child.parentElement?.closest("topic");
+      if (nearestParentTopic === topic) {
+        lines.push(this.xMindXmlTopic(child, depth + 1));
+      }
+    }
+    return lines.join("\n");
+  }
+
+  private directChildText(element: Element, localName: string): string {
+    return Array.from(element.children).find(
+      (child) => child.localName === localName
+    )?.textContent?.trim() ?? "";
+  }
+
+  private async buildWordPreviewMarkdown(
+    asset: UploadedAsset,
+    content: ArrayBuffer
+  ): Promise<string> {
+    const result = await mammoth.convertToHtml(
+      { arrayBuffer: content },
+      {
+        styleMap: [
+          "p[style-name='Title'] => h1:fresh",
+          "p[style-name='Subtitle'] => h2:fresh"
+        ]
+      }
+    );
+    const prepared = this.extractWordTables(result.value);
+    const turndown = new TurndownService({
+      headingStyle: "atx",
+      bulletListMarker: "-",
+      codeBlockStyle: "fenced",
+      emDelimiter: "*",
+      strongDelimiter: "**"
+    });
+    turndown.use(gfm);
+    let markdown = turndown
+      .turndown(prepared.html)
+      .replace(
+        /<\/?(?:table|thead|tbody|tfoot|tr|th|td|p)(?:\s[^>]*)?>/gi,
+        ""
+      );
+    prepared.tables.forEach((table, index) => {
+      markdown = markdown.replace(`SIYUANWORDTABLE${index}END`, table);
+    });
+    markdown = markdown.replace(/\n{3,}/g, "\n\n").trim();
+    const attachment = this.buildAttachmentMarkdown([asset]);
+    const warning = result.messages.length > 0
+      ? `\n\n> Word 转换提示：${result.messages.length} 项复杂格式未完全还原，请通过附件查看原版。`
+      : "";
+    const preview = markdown || "该 Word 文档没有可显示的正文。";
+    return `${preview}${warning}\n\n---\n\n### 附件\n\n📎 ${attachment}`;
+  }
+
+  private extractWordTables(html: string): { html: string; tables: string[] } {
+    const documentNode = new DOMParser().parseFromString(html, "text/html");
+    const tables: string[] = [];
+    const tableElements = Array.from(documentNode.querySelectorAll("table"));
+
+    for (const table of tableElements.reverse()) {
+      if (!table.isConnected) continue;
+      const rows = Array.from(table.querySelectorAll(":scope > thead > tr, :scope > tbody > tr, :scope > tr"))
+        .map((row) =>
+          Array.from(row.querySelectorAll(":scope > th, :scope > td")).map(
+            (cell) => this.normalizeWordTableCell(cell.textContent ?? "")
+          )
+        )
+        .filter((row) => row.length > 0);
+      if (rows.length === 0) {
+        table.remove();
+        continue;
+      }
+
+      const columnCount = Math.max(...rows.map((row) => row.length));
+      const normalizedRows = rows.map((row) =>
+        Array.from({ length: columnCount }, (_, index) => row[index] ?? "")
+      );
+      const tableMarkdown =
+        normalizedRows.length === 1 && columnCount === 1
+          ? `> ${normalizedRows[0][0]}`
+          : [
+              `| ${normalizedRows[0].join(" | ")} |`,
+              `| ${Array(columnCount).fill("---").join(" | ")} |`,
+              ...normalizedRows
+                .slice(1)
+                .map((row) => `| ${row.join(" | ")} |`)
+            ].join("\n");
+      const index = tables.length;
+      tables.push(tableMarkdown);
+      table.replaceWith(documentNode.createTextNode(`SIYUANWORDTABLE${index}END`));
+    }
+
+    return { html: documentNode.body.innerHTML, tables };
+  }
+
+  private normalizeWordTableCell(value: string): string {
+    return value
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\\/g, "\\\\")
+      .replace(/\|/g, "\\|");
+  }
+
+  private buildSpreadsheetPreviewMarkdown(
+    asset: UploadedAsset
+  ): string {
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="width: 100%; height: 760px; min-height: 600px; border: 1px solid var(--b3-border-color); border-radius: 8px;" frameborder="0"></iframe>`;
+  }
+
+  private escapeMarkdownHeading(value: string): string {
+    return value.replace(/\r?\n/g, " ").replace(/#/g, "\\#");
+  }
+
+  private buildPdfPreviewMarkdown(asset: UploadedAsset): string {
+    const attachment = this.buildAttachmentMarkdown([asset]);
+    const source = `/${asset.assetPath}`;
+    const escapedSource = this.escapeHtmlAttribute(source);
+    return `<iframe src="${escapedSource}" data-src="${escapedSource}" style="width: 100%; height: 78vh; min-height: 640px; border: 1px solid var(--b3-border-color); border-radius: 6px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${attachment}`;
+  }
+
+  private escapeHtmlAttribute(value: string): string {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  private isFileDrag(event: DragEvent): boolean {
+    const transfer = event.dataTransfer;
+    if (!transfer) {
+      return false;
+    }
+
+    const types = Array.from(transfer.types ?? []).map((type) =>
+      type.toLowerCase()
+    );
+    return (
+      types.includes("files") ||
+      Array.from(transfer.items ?? []).some((item) => item.kind === "file") ||
+      transfer.files.length > 0
+    );
+  }
+
+  private isSupportedPoint(event: DragEvent): boolean {
+    return this.findDropTarget(event) !== null;
+  }
+
+  private findDropTarget(event: DragEvent): DropTarget | null {
+    const pointedElement = document.elementFromPoint(event.clientX, event.clientY);
+    const editor = pointedElement?.closest(EDITOR_SELECTOR);
+    if (editor) {
+      const block = pointedElement?.closest<HTMLElement>(BLOCK_SELECTOR);
+      const id = block?.dataset.nodeId;
+      return id ? { id, position: "after-block" } : null;
+    }
+
+    return this.findTreeDropTarget(event);
+  }
+
+  private findTreeDropTarget(event: DragEvent): DropTarget | null {
+    const candidates = [
+      ...document.elementsFromPoint(event.clientX, event.clientY),
+      ...(event.target instanceof Element ? [event.target] : [])
+    ];
+    for (const candidate of candidates) {
+      const treeItem =
+        candidate.closest<HTMLElement>(TREE_DOCUMENT_SELECTOR) ??
+        candidate.closest<HTMLElement>(
+          ".b3-list-item[data-type='navigation-file']"
+        );
+      // In SiYuan's document tree, data-node-id can be placed on the
+      // surrounding <li> rather than on the visible .b3-list-item row.
+      const idElement = treeItem
+        ? candidate.closest<HTMLElement>("[data-node-id]") ??
+          treeItem.closest<HTMLElement>("[data-node-id]") ??
+          treeItem.querySelector<HTMLElement>("[data-node-id]")
+        : null;
+      const id = idElement?.dataset.nodeId;
+      if (id) {
+        return { id, position: "create-child-documents" };
+      }
+
+      const notebookRoot = candidate.closest<HTMLElement>(
+        ".b3-list-item[data-type='navigation-root']"
+      );
+      const notebook = notebookRoot
+        ?.closest<HTMLElement>("ul[data-url]")
+        ?.getAttribute("data-url");
+      if (notebook) {
+        return { id: notebook, position: "create-root-documents" };
+      }
+    }
+    return null;
+  }
+
+  private describeDrop(event: DragEvent, target: DropTarget | null, files: File[] = []): Record<string, unknown> {
+    const element = event.target instanceof HTMLElement ? event.target : null;
+    return {
+      target,
+      fileNames: files.map((file) => file.name),
+      transferTypes: Array.from(event.dataTransfer?.types ?? []),
+      element: element ? { tag: element.tagName, className: element.className } : null
+    };
+  }
+
+  private async recordDebug(stage: string, details: Record<string, unknown> = {}): Promise<void> {
+    this.debug = { stage, time: new Date().toISOString(), ...details };
+    try {
+      await this.saveData("drop-debug.json", this.debug);
+    } catch (error) {
+      console.error("[Drop Importer] Cannot save diagnostics", error);
+    }
+  }
+
+  private escapeMarkdownLabel(value: string): string {
+    return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+  }
+
+  private showOverlay(): void {
+    if (this.overlay) {
+      return;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.dataset.dropImporterOverlay = "true";
+    overlay.textContent = "松开鼠标，将文件导入目标文档";
+    Object.assign(overlay.style, {
+      position: "fixed",
+      inset: "12px",
+      zIndex: "9999",
+      display: "grid",
+      placeItems: "center",
+      pointerEvents: "none",
+      border: "2px dashed var(--b3-theme-primary)",
+      borderRadius: "12px",
+      color: "var(--b3-theme-primary)",
+      background: "color-mix(in srgb, var(--b3-theme-primary) 10%, transparent)",
+      fontSize: "18px",
+      fontWeight: "600"
+    });
+    document.body.appendChild(overlay);
+    this.overlay = overlay;
+  }
+
+  private removeOverlay(): void {
+    this.overlay?.remove();
+    this.overlay = null;
+  }
+
+  private showToast(message: string, isError = false): void {
+    document.querySelector("[data-drop-importer-toast]")?.remove();
+
+    const toast = document.createElement("div");
+    toast.dataset.dropImporterToast = "true";
+    toast.textContent = message;
+    Object.assign(toast.style, {
+      position: "fixed",
+      right: "24px",
+      bottom: "24px",
+      zIndex: "10000",
+      maxWidth: "360px",
+      padding: "10px 14px",
+      borderRadius: "8px",
+      color: "var(--b3-theme-on-surface)",
+      background: isError
+        ? "var(--b3-card-error-background, var(--b3-theme-error))"
+        : "var(--b3-theme-surface)",
+      boxShadow: "var(--b3-dialog-shadow)",
+      fontSize: "14px"
+    });
+    document.body.appendChild(toast);
+
+    if (this.toastTimer !== null) {
+      window.clearTimeout(this.toastTimer);
+    }
+    this.toastTimer = window.setTimeout(() => {
+      toast.remove();
+      this.toastTimer = null;
+    }, 3200);
+  }
+}
+
+export = DropImporterPlugin;

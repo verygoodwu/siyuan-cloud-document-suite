@@ -1,0 +1,36 @@
+{
+  "name": "siyuan-cloud-document-suite",
+  "version": "1.4.0",
+  "private": true,
+  "description": "Cloud Document Suite for importing, editing, previewing, and exporting documents in SiYuan.",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "webpack --mode development",
+    "build": "tsc --noEmit && node scripts/build.mjs && node scripts/package.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "node scripts/package.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "mammoth": "1.12.1",
+    "mind-elixir": "5.15.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.6",
+    "copy-webpack-plugin": "^14.0.0",
+    "esbuild": "0.28.2",
+    "esbuild-loader": "^4.4.3",
+    "siyuan": "1.2.4",
+    "typescript": "^6.0.3",
+    "webpack": "^5.107.2",
+    "webpack-cli": "^7.0.3",
+    "zip-webpack-plugin": "^4.0.3"
+  }
+}
