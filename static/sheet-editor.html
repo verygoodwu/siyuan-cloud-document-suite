@@ -6,16 +6,17 @@
   <style>
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;font:13px system-ui;color:#202124;background:#fff}
     #app{height:100%;display:flex;flex-direction:column}.toolbar{height:44px;display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fafafa}
-    button{border:1px solid #d0d5dd;border-radius:6px;background:#fff;padding:6px 10px;cursor:pointer}button.danger{color:#d92d20}
-    #status{margin-left:auto;color:#667085}.grid-wrap{flex:1;overflow:auto;position:relative}table{border:0;border-collapse:separate;border-spacing:0;table-layout:fixed;min-width:100%}
+    button{border:1px solid #d0d5dd;border-radius:6px;background:#fff;padding:6px 10px;cursor:pointer}button:disabled{cursor:default;opacity:.45}button.danger{color:#d92d20}
+    .find-wrap{display:flex;align-items:center;gap:4px;margin-left:auto}.find-wrap input{width:150px;height:30px;border:1px solid #d0d5dd;border-radius:6px;padding:4px 8px;outline:0}.find-wrap input:focus{border-color:#3f73f1;box-shadow:0 0 0 2px #3f73f122}.find-wrap button{padding:5px 8px}.find-count{min-width:38px;color:#667085;text-align:center}
+    #status{color:#667085}.grid-wrap{flex:1;overflow:auto;position:relative}table{border:0;border-collapse:separate;border-spacing:0;table-layout:fixed;min-width:100%}
     th,td{height:28px;min-width:110px;border:0;border-right:1px solid #e4e7ec;border-bottom:1px solid #e4e7ec;padding:4px 6px;white-space:pre;overflow:hidden}tr>:last-child{border-right:0}tbody tr:last-child>*{border-bottom:0}
-    td:hover{background:#f8fafc}td:focus{outline:2px solid #3f73f1;outline-offset:-2px;background:#fff}thead th{position:sticky;top:0;z-index:3;background:#f5f6f8;text-align:center;border-bottom-color:#d0d5dd}.row-head{position:sticky;left:0;z-index:2;min-width:46px;width:46px;background:#f5f6f8;text-align:center;font-weight:400;border-right-color:#d0d5dd}.corner{left:0;z-index:4!important}
+    td:hover{background:#f8fafc}td.range-selected{background:#edf3ff}td.selection-top{border-top:2px solid #3f73f1}td.selection-right{border-right:2px solid #3f73f1}td.selection-bottom{border-bottom:2px solid #3f73f1}td.selection-left{border-left:2px solid #3f73f1}td.active-cell{position:relative}table:not(.range-multi) td.active-cell{outline:2px solid #3f73f1;outline-offset:-2px;background:#fff}table.range-multi td.active-cell:focus{outline:0}td.search-match{box-shadow:inset 0 0 0 2px #f5b700}td.search-current{box-shadow:inset 0 0 0 3px #f79009;background:#fff7e6}td:focus{outline:2px solid #3f73f1;outline-offset:-2px}thead th{position:sticky;top:0;z-index:3;background:#f5f6f8;text-align:center;border-bottom-color:#d0d5dd}.row-head{position:sticky;left:0;z-index:2;min-width:46px;width:46px;background:#f5f6f8;text-align:center;font-weight:400;border-right-color:#d0d5dd}.corner{left:0;z-index:4!important}
     .tabs{height:40px;display:flex;align-items:center;gap:4px;padding:5px 8px;background:#fafafa;overflow-x:auto}.tab{padding:6px 14px}.tab.active{color:#245bd7;border-color:#7699ef;background:#edf3ff}
   </style>
 </head>
 <body>
   <div id="app">
-    <div class="toolbar"><button id="add-row">+ 行</button><button id="add-col">+ 列</button><button id="rename">重命名 Sheet</button><button id="delete" class="danger">删除 Sheet</button><button id="export">导出 .xlsx</button><span id="status">正在加载…</span></div>
+    <div class="toolbar"><button id="add-row">+ 行</button><button id="add-col">+ 列</button><button id="undo" disabled title="撤销单元格修改（Ctrl+Z）">撤销</button><button id="redo" disabled title="重做单元格修改（Ctrl+Y）">重做</button><button id="rename">重命名 Sheet</button><button id="delete" class="danger">删除 Sheet</button><button id="export">导出 .xlsx</button><div class="find-wrap"><input id="find" type="search" placeholder="查找当前 Sheet（Ctrl+F）"><button id="find-prev" title="上一个匹配">↑</button><button id="find-next" title="下一个匹配">↓</button><span id="find-count" class="find-count"></span></div><span id="status">正在加载…</span></div>
     <div class="grid-wrap"><table id="grid"></table></div>
     <div class="tabs" id="tabs"><button id="add-sheet">＋ 新建 Sheet</button></div>
   </div>

@@ -6,6 +6,7 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Changelog (short version)
 
+- **v1.8.0**: Added spreadsheet range selection, copy/paste, undo/redo, keyboard navigation, current-sheet search, lightweight formula calculation and dependency refresh, plus a cleaner marketplace icon.
 - **v1.7.0**: Refined the default `.mm` hierarchy view with Feishu-style orthogonal branches, placeholder nodes, and formatting; removed summaries/custom links; prevented new mind maps and spreadsheets from reusing stale assets; and expanded deletion, conflict, and recovery safeguards.
 - **v1.6.8**: Mind-map tasks now toggle a gray strikethrough state directly, with a saved hierarchy view and corrected task-circle/underline rendering.
 - **v1.6.7**: Eliminated the resize flash when opening spreadsheets or mind maps.
@@ -29,7 +30,7 @@ Development will next focus on improving `.mm` and Excel support, including form
 
 - Drag files from Windows Explorer onto a document or notebook in the document tree. The plugin uploads the source file and creates a same-named child document.
 - Inline PDF preview with the original attachment retained.
-- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, automatic SiYuan asset persistence, and `.xlsx` export.
+- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, range copy/paste, undo/redo, keyboard navigation, current-sheet search, common formula calculation, automatic SiYuan asset persistence, and `.xlsx` export.
 - `.docx` content conversion with the original attachment retained, plus a context-menu action for creating Word documents.
 - XMind import for both modern `content.json` and legacy `content.xml` packages.
 - Live FreeMind/Freeplane `.mm` editing with draggable nodes, automatic SiYuan asset persistence, and standards-compatible `.mm` export.

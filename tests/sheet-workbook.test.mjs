@@ -4,11 +4,17 @@ import * as XLSX from "xlsx";
 
 import {
   applyRecoveryPayload,
+  captureCellRange,
+  cellInputText,
+  cellRangeToTsv,
   deleteWorksheet,
   makeRecoveryPayload,
+  parseClipboardTable,
   parseWorkbookModel,
   renameWorksheet,
+  restoreCellRange,
   serializeWorkbookModel,
+  setCellRange,
   setCellText
 } from "../static/sheet-workbook.js";
 
@@ -58,6 +64,68 @@ test("operation recovery reapplies edits without rebuilding the workbook", () =>
   });
   assert.equal(reopened.Sheets.Calc.B1.v, "20");
   assert.equal(reopened.Sheets.Calc.C1.f, "A1+B1");
+});
+
+test("simple formulas calculate, refresh dependencies, and remain editable", () => {
+  const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/formula.xlsx");
+  setCellText(XLSX, model, "Calc", 2, 2, "A1+B1");
+  assert.equal(model.workbook.Sheets.Calc.C3.f, "A1+B1");
+  assert.equal(model.workbook.Sheets.Calc.C3.v, 3);
+  assert.equal(model.sheets[0].data[2][2], "3");
+  assert.equal(cellInputText(XLSX, model, "Calc", 2, 2), "=A1+B1");
+
+  setCellText(XLSX, model, "Calc", 0, 0, "5");
+  assert.equal(model.workbook.Sheets.Calc.C3.v, 7);
+  assert.equal(model.sheets[0].data[2][2], "7");
+
+  setCellText(XLSX, model, "Calc", 3, 2, "=(A1+B1)*2");
+  assert.equal(model.workbook.Sheets.Calc.C4.f, "(A1+B1)*2");
+  assert.equal(model.workbook.Sheets.Calc.C4.v, 14);
+
+  setCellText(XLSX, model, "Calc", 4, 2, "SUM(A1:B1)");
+  setCellText(XLSX, model, "Calc", 5, 2, "=AVERAGE(A1:B1)");
+  setCellText(XLSX, model, "Calc", 6, 2, "=MIN(A1:B1)+MAX(A1:B1)");
+  setCellText(XLSX, model, "Calc", 7, 2, "=COUNT(A1:B2)");
+  setCellText(XLSX, model, "Calc", 8, 2, "=ROUND(10/3,2)");
+  setCellText(XLSX, model, "Calc", 9, 2, "=ABS(-5)");
+  setCellText(XLSX, model, "Calc", 10, 2, "=IF(A1>B1,100,0)");
+  assert.equal(model.workbook.Sheets.Calc.C5.v, 7);
+  assert.equal(model.workbook.Sheets.Calc.C6.v, 3.5);
+  assert.equal(model.workbook.Sheets.Calc.C7.v, 7);
+  assert.equal(model.workbook.Sheets.Calc.C8.v, 2);
+  assert.equal(model.workbook.Sheets.Calc.C9.v, 3.33);
+  assert.equal(model.workbook.Sheets.Calc.C10.v, 5);
+  assert.equal(model.workbook.Sheets.Calc.C11.v, 100);
+
+  setCellText(XLSX, model, "Calc", 11, 2, "=VLOOKUP(A1,A1:B2,2,0)");
+  assert.equal(model.workbook.Sheets.Calc.C12.f, "VLOOKUP(A1,A1:B2,2,0)");
+  assert.equal(model.sheets[0].data[11][2], "#暂不支持");
+});
+
+test("range paste and recovery preserve rectangular clipboard data", () => {
+  const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/range.xlsx");
+  const values = parseClipboardTable("甲\t乙\r\n1\t2\r\n");
+  assert.deepEqual(values, [["甲", "乙"], ["1", "2"]]);
+  setCellRange(XLSX, model, "Calc", 2, 1, values);
+  assert.equal(cellRangeToTsv(XLSX, model, "Calc", 2, 1, 2, 2), "甲\t乙\n1\t2");
+
+  const restored = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/range.xlsx");
+  applyRecoveryPayload(XLSX, restored, makeRecoveryPayload(model));
+  assert.equal(cellRangeToTsv(XLSX, restored, "Calc", 2, 1, 2, 2), "甲\t乙\n1\t2");
+});
+
+test("range snapshots restore formulas and styles for undo", () => {
+  const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/undo.xlsx");
+  const before = captureCellRange(XLSX, model, "Calc", 0, 2, 1, 1);
+  assert.equal(before[0][0].f, "A1+B1");
+  setCellRange(XLSX, model, "Calc", 0, 2, [["覆盖"]]);
+  assert.equal(model.workbook.Sheets.Calc.C1.f, undefined);
+  restoreCellRange(XLSX, model, "Calc", 0, 2, before);
+  assert.equal(model.workbook.Sheets.Calc.C1.f, "A1+B1");
+
+  const restored = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/undo.xlsx");
+  applyRecoveryPayload(XLSX, restored, makeRecoveryPayload(model));
+  assert.equal(restored.workbook.Sheets.Calc.C1.f, "A1+B1");
 });
 
 test("renaming a sheet updates formula references", () => {
