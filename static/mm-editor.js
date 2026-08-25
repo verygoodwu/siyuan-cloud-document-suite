@@ -1,4 +1,4 @@
-import MindElixir from "./MindElixir.js";
+import MindElixir from "./MindElixir.js?v=right-pan-1";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
 
 const params = new URLSearchParams(location.search);
@@ -55,9 +55,58 @@ function makeId(element) {
 }
 
 function nodeText(element) {
-  return element.getAttribute("TEXT")?.trim() ||
+  const text = element.getAttribute("TEXT")?.trim() ||
     element.querySelector(":scope > richcontent[type='NODE']")?.textContent?.trim() ||
-    "未命名主题";
+    "";
+  return /^(?:新节点|未命名主题|new node)$/i.test(text) || !text
+    ? "输入文字"
+    : text;
+}
+
+function isLeftBranch(direction) {
+  return direction === MindElixir.LEFT || String(direction).toLowerCase().includes("lhs");
+}
+
+function roundedOrthogonalAt(startX, startY, endX, endY, elbowX) {
+  if (Math.abs(endY - startY) < 1) return `M ${startX} ${startY} H ${endX}`;
+  const horizontalSign = endX >= startX ? 1 : -1;
+  const verticalSign = endY >= startY ? 1 : -1;
+  const radius = Math.min(10, Math.abs(endY - startY) / 2, Math.abs(elbowX - startX), Math.abs(endX - elbowX));
+  return `M ${startX} ${startY} H ${elbowX - horizontalSign * radius}` +
+    ` Q ${elbowX} ${startY} ${elbowX} ${startY + verticalSign * radius}` +
+    ` V ${endY - verticalSign * radius}` +
+    ` Q ${elbowX} ${endY} ${elbowX + horizontalSign * radius} ${endY} H ${endX}`;
+}
+
+function roundedOrthogonalBranch(startX, startY, endX, endY, elbowDistance) {
+  const horizontalSign = endX >= startX ? 1 : -1;
+  const availableX = Math.abs(endX - startX);
+  const elbowX = startX + horizontalSign * Math.min(elbowDistance, availableX / 2);
+  return roundedOrthogonalAt(startX, startY, endX, endY, elbowX);
+}
+
+function generateFeishuMainBranch({ pT, pL, pW, pH, cT, cL, cW, cH, direction }) {
+  const left = isLeftBranch(direction);
+  return roundedOrthogonalBranch(
+    left ? pL : pL + pW,
+    pT + pH / 2,
+    left ? cL + cW : cL,
+    cT + cH / 2,
+    28
+  );
+}
+
+function generateFeishuSubBranch({ pT, pL, pW, pH, cT, cL, cW, cH, direction }) {
+  const left = isLeftBranch(direction);
+  const gap = Number.parseInt(this.container.style.getPropertyValue("--node-gap-x"), 10) || 30;
+  const parentEdge = left ? pL : pL + pW;
+  return roundedOrthogonalAt(
+    left ? parentEdge + gap : parentEdge - gap,
+    pT + pH / 2,
+    left ? cL + gap : cL + cW - gap,
+    cT + cH / 2,
+    parentEdge
+  );
 }
 
 function directChild(element, name) {
@@ -127,7 +176,7 @@ function buildPreservedNode(documentNode, sourceById, node, root = false) {
   }
 
   setAttribute(element, "ID", node.id || `mm-${createRandomId()}`);
-  setAttribute(element, "TEXT", node.topic || "未命名主题");
+  setAttribute(element, "TEXT", node.topic || "输入文字");
   setAttribute(element, "POSITION", root ? null : node.direction === 0 ? "left" : "right");
   setAttribute(element, "FOLDED", node.expanded === false ? "true" : null);
   setAttribute(element, "COLOR", node.style?.color || null);
@@ -231,6 +280,7 @@ function decorateNodes(mind) {
     topic.querySelector(":scope > .task-box")?.remove();
     topic.dataset.depth = String(nodeDepth(node));
     topic.classList.toggle("task-done", Boolean(node.metadata?.task?.done));
+    topic.classList.toggle("node-underlined", Boolean(node.style?.textDecoration?.includes("underline")));
   }
   updateViewStyle(mind);
   updateToolbar(mind);
@@ -266,8 +316,11 @@ function serializeMm(mind) {
   setAttribute(
     map,
     "CLOUD_VIEW_STYLE",
-    data.nodeData.metadata?.cloudViewStyle === "hierarchy" ? "hierarchy" : null
+    data.nodeData.metadata?.cloudViewStyle === "hierarchy" ? "hierarchy" : "classic"
   );
+  setAttribute(map, "CLOUD_DIRECTION", data.direction ?? mind.direction ?? 2);
+  setAttribute(map, "CLOUD_ARROWS", null);
+  setAttribute(map, "CLOUD_SUMMARIES", null);
   const sourceById = new Map(
     Array.from(map.getElementsByTagName("node"))
       .filter((element) => element.getAttribute("ID"))
@@ -304,10 +357,15 @@ function parseMm(bytes) {
   if (!root) throw new Error("未找到脑图根节点");
   sourceDocument = xml;
   const nodeData = convertNode(root, 1, true);
-  if (xml.documentElement.getAttribute("CLOUD_VIEW_STYLE") === "hierarchy") {
+  const savedViewStyle = xml.documentElement.getAttribute("CLOUD_VIEW_STYLE");
+  if (savedViewStyle !== "classic") {
     nodeData.metadata = { ...nodeData.metadata, cloudViewStyle: "hierarchy" };
   }
-  return { nodeData, direction: 2 };
+  const savedDirection = Number(xml.documentElement.getAttribute("CLOUD_DIRECTION"));
+  return {
+    nodeData,
+    direction: [0, 1, 2, 3].includes(savedDirection) ? savedDirection : 2
+  };
 }
 
 async function loadInitialData() {
@@ -329,13 +387,17 @@ async function loadInitialData() {
 
 try {
   const { value: data, state: initialState } = await loadInitialData();
+  delete data.arrows;
+  delete data.summaries;
   const mind = new MindElixir({
     el: "#map",
     direction: 2,
-    newTopicName: "新节点",
+    newTopicName: "输入文字",
     editable: true,
-    contextMenu: { locale: zhCnMenu, focus: true, link: true },
+    contextMenu: { locale: zhCnMenu, focus: true, link: false },
     toolBar: true,
+    generateMainBranch: generateFeishuMainBranch,
+    generateSubBranch: generateFeishuSubBranch,
     keypress: {
       Tab: (event) => {
         const target = mind.currentNode;
@@ -352,6 +414,11 @@ try {
     compact: false
   });
   await mind.init(data);
+  // MindElixir reapplies the theme during init, which restores its curved
+  // branch generators. Bind the Feishu-style paths after initialization.
+  mind.generateMainBranch = generateFeishuMainBranch;
+  mind.generateSubBranch = generateFeishuSubBranch;
+  mind.refresh();
   const toolbarTitles = {
     fullscreen: "全屏",
     toCenter: "居中显示",
@@ -367,6 +434,30 @@ try {
       control.title = title;
       control.setAttribute("aria-label", title);
     }
+  }
+  const directionControls = {
+    tbltl: { direction: 0, title: "全部向左布局" },
+    tbltr: { direction: 1, title: "全部向右布局" },
+    tblts: { direction: 2, title: "左右布局" }
+  };
+  for (const [id, config] of Object.entries(directionControls)) {
+    const control = document.getElementById(id);
+    if (!control) continue;
+    control.title = config.title;
+    control.setAttribute("aria-label", config.title);
+    control.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const children = mind.nodeData.children || [];
+      children.forEach((child, index) => {
+        child.direction = config.direction === 2 ? index % 2 : config.direction;
+      });
+      mind.direction = config.direction;
+      mind.refresh();
+      mind.toCenter();
+      mind.bus.fire("operation", { name: "changeDirection", obj: { direction: config.direction } });
+      requestAnimationFrame(() => decorateNodes(mind));
+    }, true);
   }
   nativeAddChild = mind.addChild.bind(mind);
   mind.addChild = (element, node) => {

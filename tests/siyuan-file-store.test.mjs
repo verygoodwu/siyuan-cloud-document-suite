@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { contentHash, SiyuanFileStore } from "../static/siyuan-file-store.js";
+import { contentHash, SaveConflictError, SiyuanFileStore } from "../static/siyuan-file-store.js";
 
 const encoder = new TextEncoder();
 
@@ -163,13 +163,89 @@ test("an older in-flight save does not clear a newer recovery snapshot", async (
   assert.deepEqual(remote, desiredB);
 });
 
+test("a deleted remote asset is never recreated by an open editor", async (context) => {
+  const storage = new Map();
+  const restores = [
+    replaceGlobal("location", new URL("http://127.0.0.1:6806/plugins/siyuan-cloud-document-suite/mm-editor.html")),
+    replaceGlobal("window", { frameElement: null }),
+    replaceGlobal("localStorage", {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key)
+    })
+  ];
+  context.after(() => restores.reverse().forEach((restore) => restore()));
+
+  let deleted = false;
+  let putCalls = 0;
+  const restoreFetch = replaceGlobal("fetch", async (input) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/assets/deleted.mm") {
+      return deleted
+        ? new Response("missing", { status: 404 })
+        : new Response(encoder.encode("before"), { status: 200 });
+    }
+    if (url.pathname === "/api/file/putFile") {
+      putCalls += 1;
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  context.after(restoreFetch);
+
+  const store = new SiyuanFileStore("/assets/deleted.mm", "recovery:deleted");
+  await store.loadRemote();
+  store.cacheRecovery({ revision: "unsaved" });
+  deleted = true;
+  await assert.rejects(() => store.save(encoder.encode("after")), /读取附件失败：HTTP 404/);
+  assert.equal(putCalls, 0);
+  assert.deepEqual(store.readRecovery()?.payload, { revision: "unsaved" });
+});
+
+test("an external asset update triggers conflict protection and keeps recovery", async (context) => {
+  const storage = new Map();
+  const restores = [
+    replaceGlobal("location", new URL("http://127.0.0.1:6806/plugins/siyuan-cloud-document-suite/mm-editor.html")),
+    replaceGlobal("window", { frameElement: null }),
+    replaceGlobal("localStorage", {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key)
+    })
+  ];
+  context.after(() => restores.reverse().forEach((restore) => restore()));
+
+  let remote = encoder.encode("base");
+  let putCalls = 0;
+  const restoreFetch = replaceGlobal("fetch", async (input) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/assets/conflict.mm") return new Response(remote, { status: 200 });
+    if (url.pathname === "/api/file/putFile") {
+      putCalls += 1;
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  context.after(restoreFetch);
+
+  const store = new SiyuanFileStore("/assets/conflict.mm", "recovery:conflict");
+  await store.loadRemote();
+  store.cacheRecovery({ revision: "local" });
+  remote = encoder.encode("changed elsewhere");
+  await assert.rejects(() => store.save(encoder.encode("local change")), SaveConflictError);
+  assert.equal(putCalls, 0);
+  assert.equal(store.conflicted, true);
+  assert.deepEqual(store.readRecovery()?.payload, { revision: "local" });
+});
+
 test("editor sources keep automatic save and readable borderless layouts", async () => {
-  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource] = await Promise.all([
+  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript] = await Promise.all([
     readFile(new URL("../static/sheet-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/sheet-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/index.ts", import.meta.url), "utf8")
+    readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8")
   ]);
 
   assert.doesNotMatch(sheetHtml, /id="save"/);
@@ -178,8 +254,11 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetHtml, /th,td\{[^}]*border-right:1px solid #e4e7ec[^}]*border-bottom:1px solid #e4e7ec/);
   assert.match(mindHtml, /#help\{left:72px;right:182px/);
   assert.match(mindHtml, /#map \.map-container\{background:#fff!important\}/);
-  assert.match(mindHtml, /me-tpc\.task-done\{text-decoration:none!important\}/);
-  assert.match(mindHtml, /me-tpc\.task-done \.text\{color:#98a2b3!important;text-decoration:line-through!important/);
+  assert.match(mindHtml, /me-tpc\.task-done,me-tpc\.node-underlined\{text-decoration:none!important\}/);
+  assert.match(mindHtml, /me-tpc\.task-done \.text\{color:#98a2b3!important;text-decoration-line:line-through!important/);
+  assert.match(mindHtml, /me-tpc\.node-underlined \.text\{text-decoration-line:underline!important/);
+  assert.match(mindHtml, /me-tpc\.task-done\.node-underlined \.text\{text-decoration-line:underline line-through!important\}/);
+  assert.match(mindHtml, /#cm-summary,#cm-link,#cm-link-bidirectional\{display:none!important\}/);
   assert.doesNotMatch(mindHtml, /\.task-box\{/);
   assert.match(mindHtml, /data-action="task" title="切换完成状态">✓ 完成/);
   assert.match(mindHtml, /id="view-style"[^>]*>层级样式/);
@@ -188,6 +267,24 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindHtml, /#input-box\{[^}]*outline:0!important[^}]*box-shadow:0 0 0 2px #3478f6!important/);
   assert.match(mindScript, /CLOUD_VIEW_STYLE/);
   assert.match(mindScript, /cloudViewStyle === "hierarchy"/);
+  assert.match(mindScript, /contextMenu: \{ locale: zhCnMenu, focus: true, link: false \}/);
+  assert.doesNotMatch(mindScript, /nativeCreateArrow|readJsonAttribute/);
+  assert.match(mindScript, /setAttribute\(map, "CLOUD_ARROWS", null\)/);
+  assert.match(mindScript, /setAttribute\(map, "CLOUD_SUMMARIES", null\)/);
+  assert.match(mindScript, /generateMainBranch: generateFeishuMainBranch/);
+  assert.match(mindScript, /generateSubBranch: generateFeishuSubBranch/);
+  assert.match(mindScript, /await mind\.init\(data\);[\s\S]*mind\.generateMainBranch = generateFeishuMainBranch;[\s\S]*mind\.generateSubBranch = generateFeishuSubBranch;[\s\S]*mind\.refresh\(\)/);
+  assert.match(mindScript, /roundedOrthogonalBranch/);
+  assert.match(mindScript, /\^\(\?:新节点\|未命名主题\|new node\)\$/);
+  assert.match(mindHtml, /stroke-linecap:round!important;stroke-linejoin:round!important/);
+  assert.doesNotMatch(mindScript, /rightDragMoved|rightDragStart/);
+  assert.match(mindHtml, /左键拖节点：调整层级.*右键拖动画布：平移视图/);
+  assert.doesNotMatch(packageScript, /f\.button === 2/);
+  assert.match(pluginSource, /this\.buildUniqueUploadName\("新建脑图\.mm"\)/);
+  assert.match(pluginSource, /asset\.originalName = "新建脑图\.mm"/);
+  assert.match(pluginSource, /this\.buildUniqueUploadName\("新建 Excel 工作簿\.xlsx"\)/);
+  assert.match(pluginSource, /asset\.originalName = "新建 Excel 工作簿\.xlsx"/);
+  assert.match(pluginSource, /<map version="1\.0\.1"><node ID="root" TEXT="中心主题" STYLE="bubble"\/><\/map>/);
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.doesNotMatch(mindScript, /querySelector\("#save"\)/);
   assert.doesNotMatch(mindScript, /createElement\("button"\);\s*checkbox\.type/);

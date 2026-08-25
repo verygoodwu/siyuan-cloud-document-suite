@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 
 import {
   applyRecoveryPayload,
+  deleteWorksheet,
   makeRecoveryPayload,
   parseWorkbookModel,
   renameWorksheet,
@@ -66,6 +67,27 @@ test("renaming a sheet updates formula references", () => {
   model.sheets.push({ name: "Summary", data: [["3"]], viewRows: 30, viewCols: 15 });
   renameWorksheet(model, "Calc", "计算 表");
   assert.equal(model.workbook.Sheets.Summary.A1.f, "'计算 表'!C1");
+});
+
+test("deleting a sheet preserves remaining sheets and replays safely from recovery", () => {
+  const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/delete.xlsx");
+  const summary = XLSX.utils.aoa_to_sheet([["keep"]]);
+  XLSX.utils.book_append_sheet(model.workbook, summary, "Summary");
+  model.sheets.push({ name: "Summary", data: [["keep"]], viewRows: 30, viewCols: 15 });
+  deleteWorksheet(model, "Calc");
+
+  assert.deepEqual(model.workbook.SheetNames, ["Summary"]);
+  assert.equal(model.workbook.Sheets.Calc, undefined);
+  assert.equal(model.workbook.Sheets.Summary.A1.v, "keep");
+  assert.throws(() => deleteWorksheet(model, "Summary"), /至少保留一个 Sheet/);
+
+  const restored = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/delete.xlsx");
+  const restoredSummary = XLSX.utils.aoa_to_sheet([["keep"]]);
+  XLSX.utils.book_append_sheet(restored.workbook, restoredSummary, "Summary");
+  restored.sheets.push({ name: "Summary", data: [["keep"]], viewRows: 30, viewCols: 15 });
+  applyRecoveryPayload(XLSX, restored, makeRecoveryPayload(model));
+  assert.deepEqual(restored.workbook.SheetNames, ["Summary"]);
+  assert.equal(restored.workbook.Sheets.Summary.A1.v, "keep");
 });
 
 test("non-xlsx assets are rejected before an incompatible write", () => {

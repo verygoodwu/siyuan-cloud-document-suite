@@ -215,8 +215,13 @@ class DropImporterPlugin extends Plugin {
     try {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
       const asset = await this.uploadAsset(
-        new File([xml], "新建脑图.mm", { type: "application/xml" })
+        new File([xml], this.buildUniqueUploadName("新建脑图.mm"), {
+          type: "application/xml"
+        })
       );
+      // The kernel keeps assets after their document is deleted. Always upload
+      // a fresh backing file, but keep the user-facing document title stable.
+      asset.originalName = "新建脑图.mm";
       asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(asset, xml);
       if (type === "notebook") {
         await this.createRootDocuments(targetId, [asset]);
@@ -297,10 +302,11 @@ class DropImporterPlugin extends Plugin {
         type: "array"
       }) as ArrayBuffer;
       const asset = await this.uploadAsset(
-        new File([content], "新建 Excel 工作簿.xlsx", {
+        new File([content], this.buildUniqueUploadName("新建 Excel 工作簿.xlsx"), {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         })
       );
+      asset.originalName = "新建 Excel 工作簿.xlsx";
       asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
       if (type === "notebook") {
         await this.createRootDocuments(targetId, [asset]);
@@ -536,6 +542,15 @@ class DropImporterPlugin extends Plugin {
     }
 
     return { originalName: file.name, assetPath };
+  }
+
+  private buildUniqueUploadName(fileName: string): string {
+    const dotIndex = fileName.lastIndexOf(".");
+    const stem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : "";
+    const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "").slice(0, 8)
+      ?? Math.random().toString(36).slice(2, 10);
+    return `${stem}-${Date.now()}-${random}${extension}`;
   }
 
   private async insertAttachmentBlock(
