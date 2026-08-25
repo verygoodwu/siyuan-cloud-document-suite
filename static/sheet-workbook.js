@@ -1,6 +1,7 @@
 export const SHEET_RECOVERY_SCHEMA = "siyuan-sheet-recovery-v2";
 export const MAX_RENDER_ROWS = 500;
 export const MAX_RENDER_COLS = 50;
+const SUITE_STATE_PROPERTY = "SiyuanCloudSheetState";
 
 function safeTitleFromAsset(asset) {
   const filename = String(asset || "").split("/").pop() || "工作簿.xlsx";
@@ -9,7 +10,7 @@ function safeTitleFromAsset(asset) {
     .replace(/\.xlsx$/i, "") || "工作簿";
 }
 
-function sheetView(XLSX, name, worksheet) {
+function sheetView(XLSX, name, worksheet, features = {}) {
   const data = XLSX.utils.sheet_to_json(worksheet, {
     header: 1,
     raw: false,
@@ -22,8 +23,35 @@ function sheetView(XLSX, name, worksheet) {
     name,
     data,
     viewRows: Math.max(30, data.length, range.e.r + 1),
-    viewCols: Math.max(15, range.e.c + 1, ...data.map((row) => row.length))
+    viewCols: Math.max(15, range.e.c + 1, ...data.map((row) => row.length)),
+    freeze: features.freeze || { rows: 0, cols: 0 },
+    filter: features.filter || null,
+    charts: Array.isArray(features.charts) ? features.charts : []
   };
+}
+
+function readSuiteState(workbook) {
+  try {
+    const raw = workbook.Custprops?.[SUITE_STATE_PROPERTY];
+    const source = String(raw || "");
+    const decoded = source.startsWith("v1:") ? decodeURIComponent(source.slice(3)) : source;
+    const parsed = decoded ? JSON.parse(decoded) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function syncSuiteState(model) {
+  model.workbook.Custprops ||= {};
+  const state = JSON.stringify(Object.fromEntries(
+    model.sheets.map((sheet) => [sheet.name, {
+      freeze: sheet.freeze || { rows: 0, cols: 0 },
+      filter: sheet.filter || null,
+      charts: Array.isArray(sheet.charts) ? sheet.charts : []
+    }])
+  ));
+  model.workbook.Custprops[SUITE_STATE_PROPERTY] = `v1:${encodeURIComponent(state)}`;
 }
 
 function ensureDataCell(sheet, row, col, value) {
@@ -306,10 +334,11 @@ export function parseWorkbookModel(XLSX, bytes, asset) {
     sheetStubs: true,
     bookVBA: true
   });
+  const suiteState = readSuiteState(workbook);
   const model = {
     title: safeTitleFromAsset(asset),
     workbook,
-    sheets: workbook.SheetNames.map((name) => sheetView(XLSX, name, workbook.Sheets[name])),
+    sheets: workbook.SheetNames.map((name) => sheetView(XLSX, name, workbook.Sheets[name], suiteState[name])),
     operations: []
   };
   recalculateWorkbookFormulas(XLSX, model);
@@ -317,6 +346,7 @@ export function parseWorkbookModel(XLSX, bytes, asset) {
 }
 
 export function serializeWorkbookModel(XLSX, model) {
+  syncSuiteState(model);
   return new Uint8Array(XLSX.write(model.workbook, {
     bookType: "xlsx",
     type: "array",
@@ -451,6 +481,303 @@ export function cellRangeToTsv(XLSX, model, sheetName, startRow, startCol, rowCo
   ).join("\n");
 }
 
+function normalizedRange(startRow, startCol, endRow, endCol) {
+  return {
+    s: { r: Math.min(startRow, endRow), c: Math.min(startCol, endCol) },
+    e: { r: Math.max(startRow, endRow), c: Math.max(startCol, endCol) }
+  };
+}
+
+function rangesOverlap(first, second) {
+  return first.s.r <= second.e.r && first.e.r >= second.s.r &&
+    first.s.c <= second.e.c && first.e.c >= second.s.c;
+}
+
+function refreshSheetRange(XLSX, model, sheetName, range) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  const worksheet = worksheetFor(model, sheetName);
+  if (!sheet) return;
+  for (let row = range.s.r; row <= range.e.r; row++) {
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r: row, c: col })];
+      ensureDataCell(sheet, row, col, cellDisplayText(XLSX, cell));
+    }
+  }
+}
+
+export function captureSheetLayout(model, sheetName) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  const worksheet = worksheetFor(model, sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  return {
+    merges: (worksheet["!merges"] || []).map((range) => structuredClone(range)),
+    rows: (worksheet["!rows"] || []).map((row) => row ? { ...row } : null),
+    freeze: structuredClone(sheet.freeze || { rows: 0, cols: 0 }),
+    filter: sheet.filter ? structuredClone(sheet.filter) : null,
+    charts: structuredClone(sheet.charts || [])
+  };
+}
+
+export function restoreSheetLayout(model, sheetName, layout, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  const worksheet = worksheetFor(model, sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  worksheet["!merges"] = (layout?.merges || []).map((range) => structuredClone(range));
+  worksheet["!rows"] = (layout?.rows || []).map((row) => row ? { ...row } : undefined);
+  sheet.freeze = structuredClone(layout?.freeze || { rows: 0, cols: 0 });
+  sheet.filter = layout?.filter ? structuredClone(layout.filter) : null;
+  sheet.charts = structuredClone(layout?.charts || []);
+  record(model, { type: "restoreLayout", sheet: sheetName, layout: structuredClone(layout) }, shouldRecord);
+}
+
+function cssColor(color) {
+  const rgb = String(color?.rgb || "").replace(/^FF/i, "");
+  return /^[0-9a-f]{6}$/i.test(rgb) ? `#${rgb}` : "";
+}
+
+export function cellPresentation(XLSX, model, sheetName, row, col) {
+  const worksheet = worksheetFor(model, sheetName);
+  const cell = worksheet[XLSX.utils.encode_cell({ r: row, c: col })];
+  const style = cell?.s || {};
+  return {
+    text: cellDisplayText(XLSX, cell),
+    bold: Boolean(style.font?.bold),
+    italic: Boolean(style.font?.italic),
+    underline: Boolean(style.font?.underline),
+    textColor: cssColor(style.font?.color),
+    fillColor: cssColor(style.fill?.fgColor),
+    horizontal: style.alignment?.horizontal || "",
+    vertical: style.alignment?.vertical || "",
+    textFlow: style.alignment?.cloudTextFlow || (style.alignment?.wrapText ? "wrap" : "cut"),
+    numberFormat: cell?.z || ""
+  };
+}
+
+export function applyCellFormatting(XLSX, model, sheetName, startRow, startCol, endRow, endCol, format, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  const worksheet = worksheetFor(model, sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  const range = normalizedRange(startRow, startCol, endRow, endCol);
+  for (let row = range.s.r; row <= range.e.r; row++) {
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const address = XLSX.utils.encode_cell({ r: row, c: col });
+      const cell = worksheet[address] ? cloneCell(worksheet[address]) : { t: "s", v: "" };
+      const style = structuredClone(cell.s || {});
+      if (["bold", "italic", "underline", "textColor"].some((key) => key in format)) {
+        style.font = { ...(style.font || {}) };
+        for (const key of ["bold", "italic", "underline"]) {
+          if (key in format) style.font[key] = Boolean(format[key]);
+        }
+        if ("textColor" in format) {
+          if (format.textColor) style.font.color = { rgb: `FF${String(format.textColor).replace("#", "").toUpperCase()}` };
+          else delete style.font.color;
+        }
+      }
+      if ("fillColor" in format) {
+        if (format.fillColor) {
+          style.fill = {
+            patternType: "solid",
+            fgColor: { rgb: `FF${String(format.fillColor).replace("#", "").toUpperCase()}` },
+            bgColor: { indexed: 64 }
+          };
+        } else delete style.fill;
+      }
+      if ("horizontal" in format || "vertical" in format || "textFlow" in format) {
+        style.alignment = { ...(style.alignment || {}) };
+        if ("horizontal" in format) {
+          if (format.horizontal) style.alignment.horizontal = format.horizontal;
+          else delete style.alignment.horizontal;
+        }
+        if ("vertical" in format) {
+          if (format.vertical) style.alignment.vertical = format.vertical;
+          else delete style.alignment.vertical;
+        }
+        if ("textFlow" in format) {
+          const textFlow = ["overflow", "cut", "wrap"].includes(format.textFlow) ? format.textFlow : "cut";
+          style.alignment.cloudTextFlow = textFlow;
+          if (textFlow === "wrap") style.alignment.wrapText = true;
+          else delete style.alignment.wrapText;
+        }
+      }
+      if ("numberFormat" in format) {
+        if (format.numberFormat) cell.z = format.numberFormat;
+        else delete cell.z;
+        delete cell.w;
+      }
+      cell.s = style;
+      worksheet[address] = cell;
+      expandWorksheetRange(XLSX, worksheet, row, col);
+    }
+  }
+  recalculateWorkbookFormulas(XLSX, model);
+  refreshSheetRange(XLSX, model, sheetName, range);
+  record(model, { type: "formatRange", sheet: sheetName, range, format: structuredClone(format) }, shouldRecord);
+}
+
+export function mergeCellRange(XLSX, model, sheetName, startRow, startCol, endRow, endCol, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const range = normalizedRange(startRow, startCol, endRow, endCol);
+  if (range.s.r === range.e.r && range.s.c === range.e.c) return false;
+  const merges = worksheet["!merges"] ||= [];
+  if (merges.some((existing) => rangesOverlap(existing, range))) throw new Error("选区与已有合并单元格重叠");
+  merges.push(structuredClone(range));
+  for (let row = range.s.r; row <= range.e.r; row++) {
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      if (row === range.s.r && col === range.s.c) continue;
+      delete worksheet[XLSX.utils.encode_cell({ r: row, c: col })];
+    }
+  }
+  refreshSheetRange(XLSX, model, sheetName, range);
+  record(model, { type: "mergeRange", sheet: sheetName, range: structuredClone(range) }, shouldRecord);
+  return true;
+}
+
+export function unmergeCellAt(XLSX, model, sheetName, row, col, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const merges = worksheet["!merges"] || [];
+  const index = merges.findIndex((range) => row >= range.s.r && row <= range.e.r && col >= range.s.c && col <= range.e.c);
+  if (index < 0) return null;
+  const [range] = merges.splice(index, 1);
+  refreshSheetRange(XLSX, model, sheetName, range);
+  record(model, { type: "unmergeRange", sheet: sheetName, range: structuredClone(range) }, shouldRecord);
+  return structuredClone(range);
+}
+
+function shiftFormulaReferences(XLSX, formula, rowDelta, colDelta) {
+  return String(formula).replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/gi, (_, colFixed, letters, rowFixed, digits) => {
+    const decoded = XLSX.utils.decode_cell(`${letters}${digits}`);
+    const row = rowFixed ? decoded.r : Math.max(0, decoded.r + rowDelta);
+    const col = colFixed ? decoded.c : Math.max(0, decoded.c + colDelta);
+    const encoded = XLSX.utils.encode_cell({ r: row, c: col });
+    const match = /^([A-Z]+)(\d+)$/.exec(encoded);
+    return `${colFixed}${match[1]}${rowFixed}${match[2]}`;
+  });
+}
+
+export function fillCellRange(XLSX, model, sheetName, source, target, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const src = normalizedRange(source.s.r, source.s.c, source.e.r, source.e.c);
+  const dst = normalizedRange(target.s.r, target.s.c, target.e.r, target.e.c);
+  const sourceRows = src.e.r - src.s.r + 1;
+  const sourceCols = src.e.c - src.s.c + 1;
+  const sourceCells = captureCellRange(XLSX, model, sheetName, src.s.r, src.s.c, sourceRows, sourceCols);
+  const verticalSeries = sourceCols === 1 && sourceRows >= 2;
+  const horizontalSeries = sourceRows === 1 && sourceCols >= 2;
+  const firstNumber = Number(sourceCells[0]?.[0]?.v);
+  const secondNumber = verticalSeries ? Number(sourceCells[1]?.[0]?.v) : Number(sourceCells[0]?.[1]?.v);
+  const hasSeries = (verticalSeries || horizontalSeries) && Number.isFinite(firstNumber) && Number.isFinite(secondNumber);
+  const step = secondNumber - firstNumber;
+  for (let row = dst.s.r; row <= dst.e.r; row++) {
+    for (let col = dst.s.c; col <= dst.e.c; col++) {
+      if (row >= src.s.r && row <= src.e.r && col >= src.s.c && col <= src.e.c) continue;
+      const sourceRow = src.s.r + ((row - src.s.r) % sourceRows + sourceRows) % sourceRows;
+      const sourceCol = src.s.c + ((col - src.s.c) % sourceCols + sourceCols) % sourceCols;
+      const template = cloneCell(sourceCells[sourceRow - src.s.r]?.[sourceCol - src.s.c]);
+      const address = XLSX.utils.encode_cell({ r: row, c: col });
+      if (hasSeries && ((verticalSeries && col === src.s.c) || (horizontalSeries && row === src.s.r))) {
+        const index = verticalSeries ? row - src.s.r : col - src.s.c;
+        const cell = template || { t: "n", v: 0 };
+        delete cell.f;
+        delete cell.w;
+        cell.t = "n";
+        cell.v = firstNumber + step * index;
+        worksheet[address] = cell;
+      } else if (template) {
+        if (typeof template.f === "string") {
+          template.f = shiftFormulaReferences(XLSX, template.f, row - sourceRow, col - sourceCol);
+          delete template.w;
+        }
+        worksheet[address] = template;
+      } else delete worksheet[address];
+      expandWorksheetRange(XLSX, worksheet, row, col);
+    }
+  }
+  recalculateWorkbookFormulas(XLSX, model);
+  refreshSheetRange(XLSX, model, sheetName, dst);
+  record(model, { type: "fillRange", sheet: sheetName, source: src, target: dst }, shouldRecord);
+}
+
+export function sortCellRange(XLSX, model, sheetName, rangeInput, keyCol, direction = "asc", headerRows = 1, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const range = normalizedRange(rangeInput.s.r, rangeInput.s.c, rangeInput.e.r, rangeInput.e.c);
+  if ((worksheet["!merges"] || []).some((merge) => rangesOverlap(merge, range))) {
+    throw new Error("包含合并单元格的区域暂不支持排序");
+  }
+  const firstDataRow = Math.min(range.e.r + 1, range.s.r + Math.max(0, headerRows));
+  const rows = [];
+  for (let row = firstDataRow; row <= range.e.r; row++) {
+    rows.push({
+      sourceRow: row,
+      cells: captureCellRange(XLSX, model, sheetName, row, range.s.c, 1, range.e.c - range.s.c + 1)[0]
+    });
+  }
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  rows.sort((first, second) => {
+    const a = cellDisplayText(XLSX, first.cells[keyCol - range.s.c]);
+    const b = cellDisplayText(XLSX, second.cells[keyCol - range.s.c]);
+    const result = collator.compare(a, b);
+    return direction === "desc" ? -result : result;
+  });
+  rows.forEach((entry, index) => {
+    const targetRow = firstDataRow + index;
+    entry.cells.forEach((sourceCell, colOffset) => {
+      const address = XLSX.utils.encode_cell({ r: targetRow, c: range.s.c + colOffset });
+      const cell = cloneCell(sourceCell);
+      if (cell && typeof cell.f === "string") {
+        cell.f = shiftFormulaReferences(XLSX, cell.f, targetRow - entry.sourceRow, 0);
+        delete cell.w;
+      }
+      if (cell) worksheet[address] = cell;
+      else delete worksheet[address];
+    });
+  });
+  recalculateWorkbookFormulas(XLSX, model);
+  refreshSheetRange(XLSX, model, sheetName, range);
+  record(model, { type: "sortRange", sheet: sheetName, range, keyCol, direction, headerRows }, shouldRecord);
+}
+
+export function setSheetFreeze(model, sheetName, rows, cols, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  sheet.freeze = { rows: Math.max(0, Number(rows) || 0), cols: Math.max(0, Number(cols) || 0) };
+  record(model, { type: "setFreeze", sheet: sheetName, freeze: { ...sheet.freeze } }, shouldRecord);
+}
+
+export function setSheetFilter(XLSX, model, sheetName, col, query, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  const worksheet = worksheetFor(model, sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  const normalized = String(query || "").trim().toLocaleLowerCase();
+  worksheet["!rows"] ||= [];
+  for (let row = 1; row < sheet.viewRows; row++) {
+    worksheet["!rows"][row] ||= {};
+    const value = String(sheet.data[row]?.[col] ?? "").toLocaleLowerCase();
+    worksheet["!rows"][row].hidden = Boolean(normalized && !value.includes(normalized));
+  }
+  sheet.filter = normalized ? { col, query: String(query).trim() } : null;
+  record(model, { type: "setFilter", sheet: sheetName, col, query: String(query || "") }, shouldRecord);
+}
+
+export function addSheetChart(model, sheetName, chart, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  const next = { id: chart.id || `chart-${Date.now()}`, type: chart.type || "bar", ...structuredClone(chart) };
+  sheet.charts ||= [];
+  sheet.charts.push(next);
+  record(model, { type: "addChart", sheet: sheetName, chart: structuredClone(next) }, shouldRecord);
+  return next;
+}
+
+export function removeSheetChart(model, sheetName, chartId, shouldRecord = true) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  const index = (sheet.charts || []).findIndex((chart) => chart.id === chartId);
+  if (index < 0) return null;
+  const [removed] = sheet.charts.splice(index, 1);
+  record(model, { type: "removeChart", sheet: sheetName, chartId }, shouldRecord);
+  return removed;
+}
+
 export function addWorksheet(XLSX, model, name, shouldRecord = true) {
   if (model.workbook.SheetNames.includes(name)) throw new Error(`Sheet 已存在：${name}`);
   const worksheet = XLSX.utils.aoa_to_sheet([[""]]);
@@ -539,6 +866,26 @@ export function applyRecoveryPayload(XLSX, model, payload) {
       setCellRange(XLSX, model, operation.sheet, operation.row, operation.col, operation.values, false);
     } else if (operation?.type === "restoreRange") {
       restoreCellRange(XLSX, model, operation.sheet, operation.row, operation.col, operation.cells, false);
+    } else if (operation?.type === "formatRange") {
+      applyCellFormatting(XLSX, model, operation.sheet, operation.range.s.r, operation.range.s.c, operation.range.e.r, operation.range.e.c, operation.format, false);
+    } else if (operation?.type === "mergeRange") {
+      mergeCellRange(XLSX, model, operation.sheet, operation.range.s.r, operation.range.s.c, operation.range.e.r, operation.range.e.c, false);
+    } else if (operation?.type === "unmergeRange") {
+      unmergeCellAt(XLSX, model, operation.sheet, operation.range.s.r, operation.range.s.c, false);
+    } else if (operation?.type === "fillRange") {
+      fillCellRange(XLSX, model, operation.sheet, operation.source, operation.target, false);
+    } else if (operation?.type === "sortRange") {
+      sortCellRange(XLSX, model, operation.sheet, operation.range, operation.keyCol, operation.direction, operation.headerRows, false);
+    } else if (operation?.type === "setFreeze") {
+      setSheetFreeze(model, operation.sheet, operation.freeze.rows, operation.freeze.cols, false);
+    } else if (operation?.type === "setFilter") {
+      setSheetFilter(XLSX, model, operation.sheet, operation.col, operation.query, false);
+    } else if (operation?.type === "addChart") {
+      addSheetChart(model, operation.sheet, operation.chart, false);
+    } else if (operation?.type === "removeChart") {
+      removeSheetChart(model, operation.sheet, operation.chartId, false);
+    } else if (operation?.type === "restoreLayout") {
+      restoreSheetLayout(model, operation.sheet, operation.layout, false);
     } else if (operation?.type === "addSheet") {
       addWorksheet(XLSX, model, operation.name, false);
     } else if (operation?.type === "renameSheet") {

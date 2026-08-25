@@ -14,6 +14,8 @@ let saveInFlight = false;
 let saveAgain = false;
 let nativeAddChild;
 let sourceDocument;
+let pendingViewportAnchor;
+let viewportAnchorTimer;
 
 const zhCnMenu = {
   addChild: "添加子节点",
@@ -100,12 +102,20 @@ function generateFeishuSubBranch({ pT, pL, pW, pH, cT, cL, cW, cH, direction }) 
   const left = isLeftBranch(direction);
   const gap = Number.parseInt(this.container.style.getPropertyValue("--node-gap-x"), 10) || 30;
   const parentEdge = left ? pL : pL + pW;
-  return roundedOrthogonalAt(
-    left ? parentEdge + gap : parentEdge - gap,
-    pT + pH / 2,
-    left ? cL + gap : cL + cW - gap,
-    cT + cH / 2,
-    parentEdge
+  const childEdge = left ? cL + cW - gap : cL + gap;
+  const parentCenterY = pT + pH / 2;
+  const childCenterY = cT + cH / 2;
+  const sameRowTolerance = Math.max(8, Math.min(pH, cH) / 2);
+  if (Math.abs(childCenterY - parentCenterY) <= sameRowTolerance) {
+    const lineY = (parentCenterY + childCenterY) / 2;
+    return `M ${parentEdge} ${lineY} H ${childEdge}`;
+  }
+  return roundedOrthogonalBranch(
+    parentEdge,
+    parentCenterY,
+    childEdge,
+    childCenterY,
+    Math.max(12, gap / 2)
   );
 }
 
@@ -139,12 +149,14 @@ function readTask(element) {
   return undefined;
 }
 
-function convertNode(element, inheritedDirection = 1, root = false) {
+function convertNode(element, inheritedDirection = 1, root = false, topLevel = false) {
   const position = element.getAttribute("POSITION")?.toLowerCase();
-  const direction = position === "left" ? 0 : position === "right" ? 1 : inheritedDirection;
+  const direction = topLevel
+    ? position === "left" ? 0 : position === "right" ? 1 : inheritedDirection
+    : inheritedDirection;
   const children = Array.from(element.children)
     .filter((child) => child.localName.toLowerCase() === "node")
-    .map((child) => convertNode(child, direction));
+    .map((child) => convertNode(child, direction, false, root));
   const importedStyle = readNodeStyle(element);
   const task = readTask(element);
   return {
@@ -166,7 +178,7 @@ function setAttribute(element, name, value) {
   else element.setAttribute(name, String(value));
 }
 
-function buildPreservedNode(documentNode, sourceById, node, root = false) {
+function buildPreservedNode(documentNode, sourceById, node, root = false, topLevel = false) {
   const source = sourceById.get(String(node.id));
   const element = source
     ? source.cloneNode(true)
@@ -177,7 +189,7 @@ function buildPreservedNode(documentNode, sourceById, node, root = false) {
 
   setAttribute(element, "ID", node.id || `mm-${createRandomId()}`);
   setAttribute(element, "TEXT", node.topic || "输入文字");
-  setAttribute(element, "POSITION", root ? null : node.direction === 0 ? "left" : "right");
+  setAttribute(element, "POSITION", topLevel ? node.direction === 0 ? "left" : "right" : null);
   setAttribute(element, "FOLDED", node.expanded === false ? "true" : null);
   setAttribute(element, "COLOR", node.style?.color || null);
   setAttribute(element, "BACKGROUND_COLOR", node.style?.background || null);
@@ -215,19 +227,44 @@ function buildPreservedNode(documentNode, sourceById, node, root = false) {
     element.appendChild(taskIcon);
   }
   for (const child of node.children || []) {
-    element.appendChild(buildPreservedNode(documentNode, sourceById, child));
+    element.appendChild(buildPreservedNode(documentNode, sourceById, child, false, root));
   }
   return element;
 }
 
+function normalizedMapDirection(value) {
+  const direction = Number(value);
+  return [0, 1, 2].includes(direction) ? direction : 1;
+}
+
+function setBranchDirection(node, direction) {
+  node.direction = direction;
+  for (const child of node.children || []) setBranchDirection(child, direction);
+}
+
+function normalizeMindDirections(data) {
+  data.direction = normalizedMapDirection(data.direction);
+  for (const [index, child] of (data.nodeData.children || []).entries()) {
+    const branchDirection = data.direction === 2
+      ? child.direction === 0 || child.direction === 1 ? child.direction : index % 2
+      : data.direction;
+    setBranchDirection(child, branchDirection);
+  }
+  return data;
+}
+
 function updateToolbar(mind) {
-  const node = mind.currentNode?.nodeObj;
+  const topic = mind.currentNode;
+  const node = topic?.nodeObj;
   nodeTools.style.display = node ? "flex" : "none";
   if (!node) return;
   nodeTools.querySelector('[data-action="bold"]').classList.toggle("active", node.style?.fontWeight === "700" || node.style?.fontWeight === "bold");
   nodeTools.querySelector('[data-action="italic"]').classList.toggle("active", node.style?.fontStyle === "italic");
   nodeTools.querySelector('[data-action="underline"]').classList.toggle("active", node.style?.textDecoration?.includes("underline"));
-  nodeTools.querySelector('[data-action="task"]').classList.toggle("active", Boolean(node.metadata?.task?.done));
+  const taskButton = nodeTools.querySelector('[data-action="task"]');
+  const taskDone = topic.classList.contains("task-done");
+  taskButton.classList.toggle("active", taskDone);
+  taskButton.setAttribute("aria-pressed", String(taskDone));
 }
 
 function isHierarchyView(mind) {
@@ -262,7 +299,10 @@ function decorateNodes(mind) {
   for (const topic of document.querySelectorAll("me-tpc")) {
     const node = topic.nodeObj;
     if (!node) continue;
-    if (!topic.querySelector(":scope > .quick-add")) {
+    const depth = nodeDepth(node);
+    const childCount = node.children?.length || 0;
+    const existingAdd = topic.querySelector(":scope > .quick-add");
+    if (depth === 0 && childCount === 0 && !existingAdd) {
       const add = document.createElement("button");
       add.type = "button";
       add.className = "quick-add";
@@ -276,14 +316,191 @@ function decorateNodes(mind) {
         await mind.addChild(topic);
       });
       topic.appendChild(add);
-    }
+    } else if (depth !== 0 || childCount > 0) existingAdd?.remove();
     topic.querySelector(":scope > .task-box")?.remove();
-    topic.dataset.depth = String(nodeDepth(node));
+    const collapsed = childCount > 0 && node.expanded === false;
+    topic.classList.toggle("has-children", childCount > 0);
+    topic.classList.toggle("node-collapsed", collapsed);
+    const parent = topic.parentElement;
+    parent?.classList.toggle("main-branch-parent", depth === 1);
+    parent?.classList.toggle("has-child-nodes", childCount > 0);
+    const expander = parent?.querySelector(":scope > me-epd");
+    if (expander) {
+      expander.dataset.childCount = String(childCount);
+      expander.dataset.collapsed = String(collapsed);
+      if (!expander.dataset.cloudToggleBound) {
+        expander.dataset.cloudToggleBound = "true";
+        expander.addEventListener("pointerdown", () => {
+          const rect = topic.getBoundingClientRect();
+          const anchor = {
+            nodeId: node.id,
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          };
+          pendingViewportAnchor = anchor;
+          clearTimeout(viewportAnchorTimer);
+          viewportAnchorTimer = setTimeout(() => {
+            if (pendingViewportAnchor === anchor) pendingViewportAnchor = undefined;
+          }, 1000);
+        }, true);
+        expander.addEventListener("click", () => {
+          queueMicrotask(() => mind.bus.fire("operation", {
+            name: "toggleExpand",
+            obj: { id: node.id, expanded: node.expanded !== false }
+          }));
+        });
+      }
+      const label = collapsed ? `展开 ${childCount} 个子节点` : "收起子节点";
+      expander.title = label;
+      expander.setAttribute("aria-label", label);
+    }
+    topic.dataset.depth = String(depth);
     topic.classList.toggle("task-done", Boolean(node.metadata?.task?.done));
     topic.classList.toggle("node-underlined", Boolean(node.style?.textDecoration?.includes("underline")));
   }
   updateViewStyle(mind);
   updateToolbar(mind);
+}
+
+function pathCoordinates(svg, startRect, endRect, left) {
+  const svgRect = svg.getBoundingClientRect();
+  const scaleX = svg.clientWidth ? svgRect.width / svg.clientWidth : 1;
+  const scaleY = svg.clientHeight ? svgRect.height / svg.clientHeight : 1;
+  const startX = ((left ? startRect.left : startRect.right) - svgRect.left) / scaleX;
+  const endX = ((left ? endRect.right : endRect.left) - svgRect.left) / scaleX;
+  const startY = (startRect.top + startRect.height / 2 - svgRect.top) / scaleY;
+  const endY = (endRect.top + endRect.height / 2 - svgRect.top) / scaleY;
+  return { startX, startY, endX, endY };
+}
+
+function branchPathFromRects(svg, startRect, endRect, left, elbowDistance) {
+  const { startX, startY, endX, endY } = pathCoordinates(svg, startRect, endRect, left);
+  const sameRowTolerance = Math.max(8, Math.min(startRect.height, endRect.height) / 2);
+  if (Math.abs(endRect.top + endRect.height / 2 - startRect.top - startRect.height / 2) <= sameRowTolerance) {
+    const lineY = (startY + endY) / 2;
+    return `M ${startX} ${lineY} H ${endX}`;
+  }
+  return roundedOrthogonalBranch(startX, startY, endX, endY, elbowDistance);
+}
+
+function collectSubConnections(wrapper, connections) {
+  const parentTopic = wrapper.querySelector(":scope > me-parent > me-tpc");
+  const children = wrapper.querySelector(":scope > me-children");
+  if (!parentTopic || !children) return;
+  for (const childWrapper of Array.from(children.children)) {
+    if (!(childWrapper instanceof HTMLElement) || childWrapper.tagName !== "ME-WRAPPER") continue;
+    const childParent = childWrapper.querySelector(":scope > me-parent");
+    const childTopic = childParent?.querySelector(":scope > me-tpc");
+    if (!childParent || !childTopic) continue;
+    connections.push({ parentTopic, childTopic });
+    const expander = childParent.querySelector(":scope > me-epd");
+    if (!expander || expander.expanded !== false) collectSubConnections(childWrapper, connections);
+  }
+}
+
+function alignVisibleHierarchy() {
+  const childrenGroups = Array.from(document.querySelectorAll("me-children"));
+  for (const children of childrenGroups) children.style.removeProperty("transform");
+  // Read after clearing every previous correction so repeated refreshes never
+  // accumulate offsets from an earlier layout.
+  void document.documentElement.offsetHeight;
+
+  const alignWrapper = (wrapper) => {
+    const parentTopic = wrapper.querySelector(":scope > me-parent > me-tpc");
+    const children = wrapper.querySelector(":scope > me-children");
+    if (!parentTopic || !children) return;
+    const childWrappers = Array.from(children.children).filter(
+      (child) => child instanceof HTMLElement && child.tagName === "ME-WRAPPER"
+    );
+    const childTopics = childWrappers
+      .map((child) => child.querySelector(":scope > me-parent > me-tpc"))
+      .filter(Boolean);
+    if (!childTopics.length) return;
+
+    const parentRect = parentTopic.getBoundingClientRect();
+    const childRects = childTopics.map((topic) => topic.getBoundingClientRect());
+    const parentCenter = parentRect.top + parentRect.height / 2;
+    const childrenCenter = (
+      Math.min(...childRects.map((rect) => rect.top)) +
+      Math.max(...childRects.map((rect) => rect.bottom))
+    ) / 2;
+    const correction = Math.abs(parentCenter - childrenCenter) < 0.25
+      ? 0
+      : Math.round((parentCenter - childrenCenter) * 100) / 100;
+    if (correction) children.style.transform = `translateY(${correction}px)`;
+
+    for (const childWrapper of childWrappers) alignWrapper(childWrapper);
+  };
+
+  for (const wrapper of document.querySelectorAll("me-main > me-wrapper")) {
+    alignWrapper(wrapper);
+  }
+}
+
+function redrawVisibleBranches() {
+  alignVisibleHierarchy();
+  const rootTopic = document.querySelector("me-root > me-tpc");
+  const mainSvg = document.querySelector("svg.lines");
+  const mainPaths = mainSvg ? Array.from(mainSvg.querySelectorAll("path")) : [];
+  const mainWrappers = Array.from(document.querySelectorAll("me-main > me-wrapper"));
+  if (rootTopic && mainSvg) {
+    const rootRect = rootTopic.getBoundingClientRect();
+    mainWrappers.forEach((wrapper, index) => {
+      const topic = wrapper.querySelector(":scope > me-parent > me-tpc");
+      const path = mainPaths[index];
+      if (!topic || !path) return;
+      const left = wrapper.parentElement?.classList.contains("lhs") === true;
+      path.setAttribute("d", branchPathFromRects(mainSvg, rootRect, topic.getBoundingClientRect(), left, 28));
+    });
+  }
+  for (const wrapper of mainWrappers) {
+    const svg = wrapper.querySelector(":scope > svg.subLines");
+    if (!svg) continue;
+    const paths = Array.from(svg.querySelectorAll("path"));
+    const connections = [];
+    collectSubConnections(wrapper, connections);
+    const left = wrapper.parentElement?.classList.contains("lhs") === true;
+    connections.forEach(({ parentTopic, childTopic }, index) => {
+      const path = paths[index];
+      if (!path) return;
+      path.setAttribute("d", branchPathFromRects(
+        svg,
+        parentTopic.getBoundingClientRect(),
+        childTopic.getBoundingClientRect(),
+        left,
+        15
+      ));
+    });
+  }
+}
+
+function restoreViewportAnchor(mind, anchor) {
+  if (!anchor) return;
+  const topic = mind.findEle(anchor.nodeId);
+  if (!topic) return;
+  const rect = topic.getBoundingClientRect();
+  const dx = anchor.x - (rect.left + rect.width / 2);
+  const dy = anchor.y - (rect.top + rect.height / 2);
+  if (Math.abs(dx) >= 0.25 || Math.abs(dy) >= 0.25) mind.move(dx, dy);
+}
+
+function refreshDecoratedLayout(mind, reveal = false) {
+  const selectedNodeId = mind.currentNode?.nodeObj?.id;
+  const viewportAnchor = pendingViewportAnchor;
+  pendingViewportAnchor = undefined;
+  clearTimeout(viewportAnchorTimer);
+  decorateNodes(mind);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    mind.refresh();
+    if (selectedNodeId) {
+      const selectedTopic = mind.findEle(selectedNodeId);
+      if (selectedTopic) mind.selectNode(selectedTopic);
+    }
+    decorateNodes(mind);
+    redrawVisibleBranches();
+    restoreViewportAnchor(mind, viewportAnchor);
+    if (reveal) document.body.classList.add("layout-ready");
+  }));
 }
 
 async function applyToolbarAction(mind, button) {
@@ -292,6 +509,7 @@ async function applyToolbarAction(mind, button) {
   const node = topic.nodeObj;
   const style = { ...(node.style || {}) };
   const action = button.dataset.action;
+  let taskDone;
   if (action === "bold") style.fontWeight = style.fontWeight === "700" ? "" : "700";
   if (action === "italic") style.fontStyle = style.fontStyle === "italic" ? "" : "italic";
   if (action === "underline") style.textDecoration = style.textDecoration?.includes("underline") ? "" : "underline";
@@ -301,14 +519,24 @@ async function applyToolbarAction(mind, button) {
   }
   const patch = { style };
   if (action === "task") {
-    const done = !node.metadata?.task?.done;
-    patch.metadata = { ...node.metadata, task: { enabled: done, done } };
+    const metadata = { ...(node.metadata || {}) };
+    taskDone = !topic.classList.contains("task-done");
+    if (taskDone) metadata.task = { enabled: true, done: true };
+    else delete metadata.task;
+    patch.metadata = metadata;
   }
   await mind.reshapeNode(topic, patch);
+  decorateNodes(mind);
+  if (action === "task") {
+    topic.classList.toggle("task-done", taskDone);
+    button.classList.toggle("active", taskDone);
+    button.setAttribute("aria-pressed", String(taskDone));
+  }
 }
 
 function serializeMm(mind) {
   const data = mind.getData();
+  normalizeMindDirections(data);
   const documentNode = sourceDocument
     ? sourceDocument.cloneNode(true)
     : new DOMParser().parseFromString('<map version="1.0.1"/>', "application/xml");
@@ -318,7 +546,7 @@ function serializeMm(mind) {
     "CLOUD_VIEW_STYLE",
     data.nodeData.metadata?.cloudViewStyle === "hierarchy" ? "hierarchy" : "classic"
   );
-  setAttribute(map, "CLOUD_DIRECTION", data.direction ?? mind.direction ?? 2);
+  setAttribute(map, "CLOUD_DIRECTION", normalizedMapDirection(data.direction ?? mind.direction));
   setAttribute(map, "CLOUD_ARROWS", null);
   setAttribute(map, "CLOUD_SUMMARIES", null);
   const sourceById = new Map(
@@ -361,11 +589,12 @@ function parseMm(bytes) {
   if (savedViewStyle !== "classic") {
     nodeData.metadata = { ...nodeData.metadata, cloudViewStyle: "hierarchy" };
   }
-  const savedDirection = Number(xml.documentElement.getAttribute("CLOUD_DIRECTION"));
-  return {
+  const savedDirectionAttribute = xml.documentElement.getAttribute("CLOUD_DIRECTION");
+  const savedDirection = savedDirectionAttribute === null ? 1 : Number(savedDirectionAttribute);
+  return normalizeMindDirections({
     nodeData,
-    direction: [0, 1, 2, 3].includes(savedDirection) ? savedDirection : 2
-  };
+    direction: [0, 1, 2].includes(savedDirection) ? savedDirection : 1
+  });
 }
 
 async function loadInitialData() {
@@ -389,9 +618,10 @@ try {
   const { value: data, state: initialState } = await loadInitialData();
   delete data.arrows;
   delete data.summaries;
+  normalizeMindDirections(data);
   const mind = new MindElixir({
     el: "#map",
-    direction: 2,
+    direction: data.direction,
     newTopicName: "输入文字",
     editable: true,
     contextMenu: { locale: zhCnMenu, focus: true, link: false },
@@ -418,7 +648,7 @@ try {
   // branch generators. Bind the Feishu-style paths after initialization.
   mind.generateMainBranch = generateFeishuMainBranch;
   mind.generateSubBranch = generateFeishuSubBranch;
-  mind.refresh();
+  refreshDecoratedLayout(mind, true);
   const toolbarTitles = {
     fullscreen: "全屏",
     toCenter: "居中显示",
@@ -450,7 +680,8 @@ try {
       event.stopImmediatePropagation();
       const children = mind.nodeData.children || [];
       children.forEach((child, index) => {
-        child.direction = config.direction === 2 ? index % 2 : config.direction;
+        const direction = config.direction === 2 ? index % 2 : config.direction;
+        setBranchDirection(child, direction);
       });
       mind.direction = config.direction;
       mind.refresh();
@@ -464,7 +695,7 @@ try {
     const target = element || mind.currentNode;
     if (target && !target.nodeObj.parent) {
       node ||= mind.generateNewObj();
-      node.direction ??= 1;
+      node.direction = mind.direction === 0 ? 0 : 1;
       const layoutDirection = mind.direction;
       mind.direction = node.direction;
       try {
@@ -481,7 +712,7 @@ try {
   };
   requestAnimationFrame(() => requestAnimationFrame(fitMap));
   setTimeout(fitMap, 300);
-  mind.bus.addListener("operation", () => {
+  const scheduleMindPersistence = () => {
     clearTimeout(saveTimer);
     try {
       store.cacheRecovery(mind.getData());
@@ -491,12 +722,28 @@ try {
       setStatus("本机恢复缓存失败：数据过大");
     }
     saveTimer = setTimeout(() => void persistMind(false), 700);
-    requestAnimationFrame(() => decorateNodes(mind));
+  };
+  for (const historyAction of ["undo", "redo"]) {
+    const nativeHistoryAction = mind[historyAction]?.bind(mind);
+    if (!nativeHistoryAction) continue;
+    mind[historyAction] = (...args) => {
+      const result = nativeHistoryAction(...args);
+      scheduleMindPersistence();
+      refreshDecoratedLayout(mind);
+      return result;
+    };
+  }
+  mind.bus.addListener("operation", (operation) => {
+    if (operation?.name === "beginEdit") return;
+    scheduleMindPersistence();
+    refreshDecoratedLayout(mind);
   });
   mind.bus.addListener("selectNodes", () => updateToolbar(mind));
   mind.bus.addListener("unselectNodes", () => updateToolbar(mind));
   nodeTools.addEventListener("pointerdown", (event) => event.stopPropagation());
   nodeTools.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     const button = event.target.closest("button");
     if (button) await applyToolbarAction(mind, button);
   });

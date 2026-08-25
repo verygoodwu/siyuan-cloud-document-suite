@@ -6,6 +6,8 @@
   <link rel="stylesheet" href="./MindElixir.css?v=__PLUGIN_VERSION__">
   <style>
     html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
+    #map{opacity:0}
+    body.layout-ready #map{opacity:1}
     #map .map-container{background:#fff!important}
     #status,#help,#export,#view-style{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
     #status{left:12px;right:auto;bottom:10px}
@@ -18,8 +20,28 @@
     #node-tools button{min-width:30px;height:30px;padding:0 8px;border:0;border-radius:5px;background:transparent;color:#fff;cursor:pointer;font:14px system-ui}
     #node-tools button:hover,#node-tools button.active{background:#ffffff24}
     #node-tools .color{width:25px;min-width:25px;padding:0;border:2px solid #fff6}
-    .quick-add{pointer-events:auto!important;position:absolute;right:-24px;top:50%;transform:translateY(-50%);width:19px;height:19px;border:0;border-radius:50%;padding:0;background:#3478f6;color:#fff;cursor:pointer;font:bold 16px/18px system-ui;box-shadow:0 1px 3px #0003}
+    .quick-add{display:none;pointer-events:auto!important;position:absolute;right:-24px;top:50%;transform:translateY(-50%);width:19px;height:19px;border:0;border-radius:50%;padding:0;background:#3478f6;color:#fff;cursor:pointer;font:bold 16px/18px system-ui;box-shadow:0 1px 3px #0003}
+    me-tpc[data-depth="0"]:not(.has-children)>.quick-add{display:block}
     .lhs .quick-add{right:auto;left:-24px}
+    #map me-nodes{isolation:isolate}
+    #map me-nodes>me-main,#map me-nodes>me-root{position:relative;z-index:10}
+    #map me-nodes>svg.lines{z-index:1!important;pointer-events:none}
+    #map me-wrapper{isolation:isolate}
+    #map me-wrapper>me-parent,#map me-wrapper>me-children{position:relative;z-index:10}
+    #map me-wrapper>svg.subLines{z-index:1!important;pointer-events:none}
+    #map me-parent>me-epd{display:grid;place-items:center;isolation:isolate;z-index:20;box-sizing:border-box;top:calc(50% - 9px)!important;min-width:18px;width:18px;height:18px;padding:0;border:2px solid #5d85ff;border-radius:50%;background:#fff!important;background-image:none!important;box-shadow:0 0 0 3px #fff;color:#3478f6;font:600 11px/1 system-ui;opacity:0;pointer-events:none;cursor:pointer;transition:opacity .15s,border-color .15s,color .15s,background-color .15s}
+    #map me-parent.has-child-nodes>me-epd.minus{pointer-events:auto}
+    #map me-parent.has-child-nodes:hover>me-epd.minus{opacity:1}
+    #map me-parent>me-epd::after{content:"";position:absolute;inset:-6px;border-radius:50%}
+    #map me-parent>me-epd.minus::before{content:"";position:relative;top:1px;box-sizing:border-box;width:7px;height:7px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(135deg);margin-left:3px}
+    #map .lhs me-parent>me-epd.minus::before{transform:rotate(-45deg);margin-right:3px;margin-left:0}
+    #map me-parent>me-epd:not(.minus){width:18px;min-width:18px;padding:0;opacity:1;pointer-events:auto}
+    #map me-parent>me-epd:not(.minus)::before{content:attr(data-child-count);display:grid;place-items:center;width:14px;height:14px;margin:0;padding:0;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+    #map me-parent>me-epd:hover{border-color:#3478f6;color:#3478f6;background:#edf3ff!important}
+    #map .rhs me-wrapper me-parent>me-epd{right:calc(var(--node-gap-x) - 23px);left:auto}
+    #map .lhs me-wrapper me-parent>me-epd{left:calc(var(--node-gap-x) - 23px);right:auto}
+    #map .rhs me-parent.main-branch-parent>me-epd{right:-23px;left:auto}
+    #map .lhs me-parent.main-branch-parent>me-epd{left:-23px;right:auto}
     #cm-summary,#cm-link,#cm-link-bidirectional{display:none!important}
     me-tpc.task-done,me-tpc.node-underlined{text-decoration:none!important}
     me-tpc.task-done .text{color:#98a2b3!important;text-decoration-line:line-through!important;text-decoration-style:solid!important;text-decoration-thickness:1px!important;text-decoration-color:currentColor!important;opacity:1}
@@ -27,7 +49,7 @@
     me-tpc.task-done.node-underlined .text{text-decoration-line:underline line-through!important}
     body.hierarchy-view me-tpc[data-depth="0"]{display:flex!important;align-items:center;justify-content:center;box-sizing:border-box;min-width:72px;min-height:52px;padding:12px 18px!important;border:0!important;border-radius:7px!important;background:#3f73f1!important;color:#fff!important;box-shadow:0 6px 12px #3478f633!important}
     body.hierarchy-view me-tpc[data-depth="1"]{display:flex!important;align-items:center;justify-content:center;box-sizing:border-box;min-height:38px;padding:9px 16px!important;border:0!important;border-radius:6px!important;background:#eef0f2!important;color:#667085!important;box-shadow:none!important}
-    body.hierarchy-view me-tpc[data-depth]:not([data-depth="0"]):not([data-depth="1"]){padding:6px 4px!important;border-color:transparent!important;border-radius:0!important;background:#fff!important;color:#98a2b3!important;box-shadow:none!important}
+    body.hierarchy-view me-tpc[data-depth]:not([data-depth="0"]):not([data-depth="1"]){display:flex!important;align-items:center!important;min-height:39px;padding:9px 4px!important;border-color:transparent!important;border-radius:0!important;background:#fff!important;color:#98a2b3!important;box-shadow:none!important}
     body.hierarchy-view me-tpc.selected:not([data-depth="0"]){border-radius:7px!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
     body.hierarchy-view me-tpc[data-depth="0"].selected{box-shadow:0 6px 12px #3478f633,0 0 0 2px #fff,0 0 0 4px #3f73f1!important}
     #input-box{border:0!important;border-radius:7px!important;outline:0!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
@@ -36,20 +58,20 @@
 </head>
 <body class="hierarchy-view">
   <div id="map"></div>
-  <div id="help">Tab/＋：添加子节点　·　双击：编辑　·　左键拖节点：调整层级　·　右键拖动画布：平移视图</div>
+  <div id="help">Tab：添加子节点　·　中心主题＋：添加主分支　·　双击：编辑　·　左键拖节点：调整层级　·　右键拖动画布：平移视图</div>
   <button id="view-style" type="button" aria-pressed="false">层级样式</button>
   <button id="export" type="button">导出 .mm</button>
   <div id="node-tools" aria-label="节点格式工具栏">
     <button type="button" data-action="bold" title="加粗"><b>B</b></button>
     <button type="button" data-action="italic" title="斜体"><i>I</i></button>
     <button type="button" data-action="underline" title="下划线"><u>U</u></button>
-    <button type="button" data-action="task" title="切换完成状态">✓ 完成</button>
+    <button type="button" data-action="task" title="切换完成状态" aria-pressed="false">✓ 完成</button>
     <button type="button" class="color" data-color="#ef9a9a" style="background:#ef9a9a" title="红色"></button>
     <button type="button" class="color" data-color="#90caf9" style="background:#90caf9" title="蓝色"></button>
     <button type="button" class="color" data-color="#80cbc4" style="background:#80cbc4" title="绿色"></button>
     <button type="button" data-action="clear" title="清除格式">清除</button>
   </div>
   <div id="status">正在加载…</div>
-  <script type="module" src="./mm-editor.js?v=__PLUGIN_VERSION__-mm9"></script>
+  <script type="module" src="./mm-editor.js?v=__PLUGIN_VERSION__-mm35"></script>
 </body>
 </html>

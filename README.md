@@ -6,6 +6,7 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Changelog (short version)
 
+- **v1.8.1**: Refined mind-map alignment, collapse controls, editing and viewport stability; expanded spreadsheet editing and formatting; promoted file creation to the top-level document-tree menu; fixed versioned editor dependencies; and reduced the transparent marketplace icon below the Bazaar size limit.
 - **v1.8.0**: Added spreadsheet range selection, copy/paste, undo/redo, keyboard navigation, current-sheet search, lightweight formula calculation and dependency refresh, plus a cleaner marketplace icon.
 - **v1.7.0**: Refined the default `.mm` hierarchy view with Feishu-style orthogonal branches, placeholder nodes, and formatting; removed summaries/custom links; prevented new mind maps and spreadsheets from reusing stale assets; and expanded deletion, conflict, and recovery safeguards.
 - **v1.6.8**: Mind-map tasks now toggle a gray strikethrough state directly, with a saved hierarchy view and corrected task-circle/underline rendering.

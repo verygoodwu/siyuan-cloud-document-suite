@@ -1,4 +1,4 @@
-import { Plugin, showMessage } from "siyuan";
+import { Plugin, showMessage, type IMenu } from "siyuan";
 import * as XLSX from "xlsx";
 import * as mammoth from "mammoth";
 import TurndownService from "turndown";
@@ -7,6 +7,7 @@ import JSZip from "jszip";
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
+const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm35`;
 
 interface KernelResponse<T> {
   code: number;
@@ -90,7 +91,7 @@ interface MindMapNode {
 }
 
 interface DocTreeMenuDetail {
-  menu: { addItem(item: { icon?: string; label: string; click: () => void | Promise<void> }): void };
+  menu: { addItem(item: IMenu): void };
   type: "doc" | "docs" | "notebook" | "notebooks" | "items";
   items: { id: string; path: string }[];
 }
@@ -102,6 +103,7 @@ class DropImporterPlugin extends Plugin {
   private boundTrees = new Set<HTMLElement>();
   private treeObserver: MutationObserver | null = null;
   private treeObserverTimer: number | null = null;
+  private menuPromotionTimers = new Set<number>();
   private embedResetStyle: HTMLStyleElement | null = null;
   private embedResizeObserver: ResizeObserver | null = null;
   private observedEmbedContents = new Set<HTMLElement>();
@@ -164,6 +166,8 @@ class DropImporterPlugin extends Plugin {
       window.clearTimeout(this.treeObserverTimer);
       this.treeObserverTimer = null;
     }
+    for (const timer of this.menuPromotionTimers) window.clearTimeout(timer);
+    this.menuPromotionTimers.clear();
     for (const tree of this.boundTrees) {
       tree.removeEventListener("dragenter", this.onTreeDragEnter, true);
       tree.removeEventListener("dragover", this.onTreeDragOver, true);
@@ -185,27 +189,95 @@ class DropImporterPlugin extends Plugin {
     if (items.length !== 1 || (type !== "doc" && type !== "notebook")) return;
     const target = items[0];
     menu.addItem({
-      icon: "iconGraph",
-      label: "新建脑图（.mm）",
-      click: async () => {
-        await this.createNewMindMap(type, target.id);
-      }
+      id: "cloud-document-create-menu",
+      type: "submenu",
+      icon: "iconAdd",
+      label: "创建文件",
+      submenu: [
+        {
+          id: "cloud-document-create-mindmap",
+          icon: "iconGraph",
+          label: "新建脑图（.mm）",
+          click: async () => {
+            await this.createNewMindMap(type, target.id);
+          }
+        },
+        {
+          id: "cloud-document-create-word",
+          icon: "iconFile",
+          label: "新建 Word 文档",
+          click: async () => {
+            await this.createNewWordDocument(type, target.id);
+          }
+        },
+        {
+          id: "cloud-document-create-excel",
+          icon: "iconTable",
+          label: "新建 Excel 工作簿",
+          click: async () => {
+            await this.createNewSpreadsheet(type, target.id);
+          }
+        }
+      ]
     });
     menu.addItem({
-      icon: "iconFile",
-      label: "新建 Word 文档",
-      click: async () => {
-        await this.createNewWordDocument(type, target.id);
+      id: "cloud-document-suite-status",
+      icon: "iconCloud",
+      label: "云文档套件",
+      click: () => {
+        showMessage("云文档套件已启用，创建入口位于一级右键菜单。", 4000);
       }
     });
-    menu.addItem({
-      icon: "iconTable",
-      label: "新建 Excel 工作簿",
-      click: async () => {
-        await this.createNewSpreadsheet(type, target.id);
-      }
-    });
+    this.scheduleCreateFileMenuPromotion();
   };
+
+  private scheduleCreateFileMenuPromotion(): void {
+    for (const delay of [0, 16, 50]) {
+      const timer = window.setTimeout(() => {
+        this.menuPromotionTimers.delete(timer);
+        this.promoteCreateFileMenu();
+      }, delay);
+      this.menuPromotionTimers.add(timer);
+    }
+  }
+
+  private promoteCreateFileMenu(): void {
+    const createItem = document.querySelector<HTMLElement>(
+      '.b3-menu [data-id="cloud-document-create-menu"]'
+    );
+    const rootMenu = createItem?.closest<HTMLElement>(".b3-menu");
+    const rootItems = rootMenu?.querySelector<HTMLElement>(
+      ":scope > .b3-menu__items"
+    );
+    if (!createItem || !rootItems || createItem.parentElement === rootItems) return;
+
+    const replaceItem = rootItems.querySelector<HTMLElement>(
+      ':scope > [data-id="replace"]'
+    );
+    const closeItem = rootItems.querySelector<HTMLElement>(
+      ':scope > [data-id="close"]'
+    );
+    const separatorBeforeClose =
+      closeItem?.previousElementSibling instanceof HTMLElement &&
+      closeItem.previousElementSibling.classList.contains("b3-menu__separator")
+        ? closeItem.previousElementSibling
+        : null;
+    if (replaceItem) rootItems.insertBefore(createItem, replaceItem.nextElementSibling);
+    else if (separatorBeforeClose) rootItems.insertBefore(createItem, separatorBeforeClose);
+    else rootItems.prepend(createItem);
+  }
+
+  private async resolveNotebookId(
+    type: "doc" | "notebook",
+    targetId: string
+  ): Promise<string> {
+    if (type === "notebook") return targetId;
+    const pathData = await this.postJson<DocumentPathData>(
+      "/api/filetree/getPathByID",
+      { id: targetId }
+    );
+    return pathData.notebook;
+  }
 
   private async createNewMindMap(
     type: "doc" | "notebook",
@@ -213,7 +285,7 @@ class DropImporterPlugin extends Plugin {
   ): Promise<void> {
     this.showToast("正在创建脑图…");
     try {
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1" CLOUD_DIRECTION="1" CLOUD_VIEW_STYLE="hierarchy"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
       const asset = await this.uploadAsset(
         new File([xml], this.buildUniqueUploadName("新建脑图.mm"), {
           type: "application/xml"
@@ -223,11 +295,8 @@ class DropImporterPlugin extends Plugin {
       // a fresh backing file, but keep the user-facing document title stable.
       asset.originalName = "新建脑图.mm";
       asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(asset, xml);
-      if (type === "notebook") {
-        await this.createRootDocuments(targetId, [asset]);
-      } else {
-        await this.createChildDocuments(targetId, [asset]);
-      }
+      const notebook = await this.resolveNotebookId(type, targetId);
+      await this.createRootDocuments(notebook, [asset]);
       this.showToast("脑图已创建");
       await this.recordDebug("mindmap-created", { type, targetId, asset });
     } catch (error) {
@@ -247,24 +316,10 @@ class DropImporterPlugin extends Plugin {
   ): Promise<void> {
     this.showToast("正在创建 Word 文档…");
     try {
-      let notebook: string;
-      let parentHPath: string;
-      if (type === "notebook") {
-        notebook = targetId;
-        parentHPath = "/";
-      } else {
-        const [pathData, hPath] = await Promise.all([
-          this.postJson<DocumentPathData>("/api/filetree/getPathByID", {
-            id: targetId
-          }),
-          this.postJson<string>("/api/filetree/getHPathByID", { id: targetId })
-        ]);
-        notebook = pathData.notebook;
-        parentHPath = hPath;
-      }
+      const notebook = await this.resolveNotebookId(type, targetId);
       const path = await this.findAvailableChildPath(
         notebook,
-        parentHPath,
+        "/",
         "新建 Word 文档"
       );
       await this.postJson<string>("/api/filetree/createDocWithMd", {
@@ -308,11 +363,8 @@ class DropImporterPlugin extends Plugin {
       );
       asset.originalName = "新建 Excel 工作簿.xlsx";
       asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
-      if (type === "notebook") {
-        await this.createRootDocuments(targetId, [asset]);
-      } else {
-        await this.createChildDocuments(targetId, [asset]);
-      }
+      const notebook = await this.resolveNotebookId(type, targetId);
+      await this.createRootDocuments(notebook, [asset]);
       this.showToast("Excel 工作簿已创建");
       await this.recordDebug("spreadsheet-created", { type, targetId, asset });
     } catch (error) {
@@ -682,9 +734,12 @@ class DropImporterPlugin extends Plugin {
         continue;
       }
       if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet)-editor\.html$/i.test(url.pathname)) continue;
-      if (url.searchParams.get("v") === PLUGIN_VERSION) continue;
+      const editorVersion = /\/mm-editor\.html$/i.test(url.pathname)
+        ? MM_EDITOR_CACHE_VERSION
+        : PLUGIN_VERSION;
+      if (url.searchParams.get("v") === editorVersion) continue;
 
-      url.searchParams.set("v", PLUGIN_VERSION);
+      url.searchParams.set("v", editorVersion);
       const refreshedSource = `${url.pathname}${url.search}${url.hash}`;
       frame.setAttribute("data-src", refreshedSource);
       frame.setAttribute("src", refreshedSource);
@@ -786,7 +841,7 @@ class DropImporterPlugin extends Plugin {
       (child) => child.localName.toLowerCase() === "node"
     );
     if (!root) throw new Error("FreeMind root node not found");
-    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(MM_EDITOR_CACHE_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
     return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
