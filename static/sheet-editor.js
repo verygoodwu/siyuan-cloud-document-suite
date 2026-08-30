@@ -10,11 +10,16 @@ import {
   applyRecoveryPayload,
   captureCellRange,
   captureSheetLayout,
+  captureWorkbookState,
   cellInputText,
   cellPresentation,
   cellRangeToTsv,
+  deleteColumns,
+  deleteRows,
   deleteWorksheet,
   fillCellRange,
+  insertColumns,
+  insertRows,
   makeRecoveryPayload,
   mergeCellRange,
   parseClipboardTable,
@@ -23,14 +28,21 @@ import {
   removeSheetChart,
   restoreCellRange,
   restoreSheetLayout,
+  restoreSheetState,
+  restoreWorkbookState,
+  selectionStatistics,
   serializeWorkbookModel,
+  setColumnWidth,
   setCellRange,
+  setCellsText,
   setCellText,
+  setRowHeight,
   setSheetFilter,
   setSheetFreeze,
   sheetDimensions,
   sortCellRange,
-  unmergeCellAt
+  unmergeCellAt,
+  validateSerializedWorkbook
 } from "./sheet-workbook.js?v=__PLUGIN_VERSION__";
 
 (() => {
@@ -63,6 +75,20 @@ import {
   const modeLabel = document.querySelector("#mode-label");
   const documentName = document.querySelector("#document-name");
   const searchPanel = document.querySelector("#search-panel");
+  const replaceInput = document.querySelector("#replace");
+  const findCase = document.querySelector("#find-case");
+  const findSelection = document.querySelector("#find-selection");
+  const findFormulas = document.querySelector("#find-formulas");
+  const replaceOneButton = document.querySelector("#replace-one");
+  const replaceAllButton = document.querySelector("#replace-all");
+  const formulaHelp = document.querySelector("#formula-help");
+  const formulaSuggestionMenu = document.querySelector("#formula-suggestion-menu");
+  const selectionSummary = document.querySelector("#selection-summary");
+  const structureContextMenu = document.querySelector("#structure-context-menu");
+  const contextStructureInsert = document.querySelector("#context-structure-insert");
+  const contextStructureDelete = document.querySelector("#context-structure-delete");
+  const operationToast = document.querySelector("#operation-toast");
+  const exportButton = document.querySelector("#export");
   let model;
   let active = 0;
   let editMode = false;
@@ -70,6 +96,7 @@ import {
   let saveTimer;
   let saveInFlight = false;
   let saveAgain = false;
+  let lastSaveError = "";
   let sizeWarning = "";
   let selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
   let selectionKind = "cells";
@@ -77,12 +104,20 @@ import {
   let fillDrag = null;
   let editSession = null;
   let formulaSession = null;
+  let headerDrag = null;
+  let contextStructureAxis = null;
+  let structureBusy = false;
+  let operationToastTimer;
+  let exportBusy = false;
   const readViewSnapshots = new Map();
   const undoStack = [];
   const redoStack = [];
   let searchMatches = [];
   let searchIndex = -1;
   let lastSearchQuery = "";
+  let lastSearchOptions = "";
+  let searchSelectionScope = null;
+  let formulaSuggestionIndex = -1;
   const HISTORY_LIMIT = 100;
 
   const columnName = (index) => {
@@ -97,6 +132,31 @@ import {
     status.textContent = sizeWarning ? `${text} · ${sizeWarning}` : text;
   };
 
+  function showOperationFeedback(text, kind = "success", duration = 2200) {
+    clearTimeout(operationToastTimer);
+    operationToast.textContent = text;
+    operationToast.dataset.kind = kind;
+    operationToast.hidden = false;
+    if (duration > 0) {
+      operationToastTimer = setTimeout(() => {
+        operationToast.hidden = true;
+      }, duration);
+    }
+  }
+
+  function setStructureBusy(busy) {
+    structureBusy = busy;
+    app.setAttribute("aria-busy", String(busy));
+    for (const button of [
+      document.querySelector("#insert-row"),
+      document.querySelector("#delete-row"),
+      document.querySelector("#insert-col"),
+      document.querySelector("#delete-col"),
+      contextStructureInsert,
+      contextStructureDelete
+    ]) button.disabled = busy;
+  }
+
   const currentSheet = () => model.sheets[active];
 
   const selectionBounds = () => ({
@@ -108,6 +168,15 @@ import {
 
   const cellLocator = (row, col) =>
     grid.querySelector(`td[data-row="${row}"][data-col="${col}"]`);
+
+  function focusCurrentSelection() {
+    const target = selectionKind === "rows"
+      ? grid.querySelector(`th.row-head[data-row="${selection.row}"]`)
+      : selectionKind === "cols"
+        ? grid.querySelector(`thead th[data-col="${selection.col}"]`)
+        : cellLocator(selection.row, selection.col);
+    target?.focus({ preventScroll: true });
+  }
 
   function captureReadView(sheet = currentSheet()) {
     if (!sheet || readViewSnapshots.has(sheet.name)) return;
@@ -170,6 +239,59 @@ import {
     return start === end ? start : `${start}:${end}`;
   }
 
+  function structureSelection(axis) {
+    const bounds = selectionBounds();
+    const wholeSelection = axis === "row" ? selectionKind === "rows" : selectionKind === "cols";
+    const index = axis === "row"
+      ? (wholeSelection ? bounds.startRow : selection.row)
+      : (wholeSelection ? bounds.startCol : selection.col);
+    const count = wholeSelection
+      ? (axis === "row" ? bounds.endRow - bounds.startRow + 1 : bounds.endCol - bounds.startCol + 1)
+      : 1;
+    const end = index + count - 1;
+    const range = axis === "row"
+      ? (count === 1 ? String(index + 1) : `${index + 1}:${end + 1}`)
+      : (count === 1 ? columnName(index) : `${columnName(index)}:${columnName(end)}`);
+    return { index, count, range };
+  }
+
+  function updateStructureActionLabels() {
+    const row = structureSelection("row");
+    const col = structureSelection("col");
+    document.querySelector("#insert-row").textContent = `＋ 在上方插入 ${row.count} 行`;
+    document.querySelector("#delete-row").textContent = `－ 删除选中 ${row.count} 行`;
+    document.querySelector("#insert-col").textContent = `＋ 在左侧插入 ${col.count} 列`;
+    document.querySelector("#delete-col").textContent = `－ 删除选中 ${col.count} 列`;
+    if (contextStructureAxis) {
+      const target = structureSelection(contextStructureAxis);
+      const noun = contextStructureAxis === "row" ? "行" : "列";
+      contextStructureInsert.textContent = contextStructureAxis === "row"
+        ? `＋ 在上方插入 ${target.count} ${noun}`
+        : `＋ 在左侧插入 ${target.count} ${noun}`;
+      contextStructureDelete.textContent = `－ 删除选中 ${target.count} ${noun}`;
+    }
+  }
+
+  const compactNumber = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 });
+
+  function updateSelectionSummary() {
+    const { startRow, endRow, startCol, endCol } = selectionBounds();
+    const stats = selectionStatistics(XLSX, model, currentSheet().name, startRow, startCol, endRow, endCol);
+    if (!stats.nonEmptyCount) {
+      selectionSummary.textContent = "";
+      selectionSummary.title = "";
+      return;
+    }
+    const parts = [`计数 ${stats.nonEmptyCount}`];
+    if (stats.numericCount) {
+      parts.push(`数字 ${stats.numericCount}`);
+      parts.push(`求和 ${compactNumber.format(stats.sum)}`);
+      parts.push(`平均 ${compactNumber.format(stats.average)}`);
+    }
+    selectionSummary.textContent = parts.join(" · ");
+    selectionSummary.title = `${selectionLabel()} 的选区统计`;
+  }
+
   function updateSelectionControls() {
     if (!model) return;
     nameBox.value = selectionLabel();
@@ -207,6 +329,8 @@ import {
       button.setAttribute("aria-checked", String(button.dataset.textFlow === flow));
     });
     filterQuery.value = currentSheet().filter?.query || "";
+    updateStructureActionLabels();
+    updateSelectionSummary();
   }
 
   function updateHistoryButtons() {
@@ -219,7 +343,10 @@ import {
   }
 
   function pushHistory(entry) {
-    if (snapshotsEqual(entry.before, entry.after) && snapshotsEqual(entry.beforeLayout, entry.afterLayout)) return;
+    if (snapshotsEqual(entry.before, entry.after)
+      && snapshotsEqual(entry.beforeLayout, entry.afterLayout)
+      && snapshotsEqual(entry.beforeState, entry.afterState)
+      && snapshotsEqual(entry.beforeWorkbookState, entry.afterWorkbookState)) return;
     undoStack.push(entry);
     if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
     redoStack.length = 0;
@@ -242,6 +369,38 @@ import {
     if (sheetIndex < 0) return;
     const after = captureCellRange(XLSX, model, session.sheet, session.row, session.col, 1, 1);
     pushHistory({ ...session, before: session.before, after });
+  }
+
+  function cancelEditSession() {
+    if (!editSession) return false;
+    const session = editSession;
+    editSession = null;
+    if (session.dirty) {
+      if (Number.isInteger(session.operationIndex)) model.operations.splice(session.operationIndex);
+      restoreCellRange(XLSX, model, session.sheet, session.row, session.col, session.before, false);
+      scheduleSave();
+      renderGrid();
+      setSelection(session.row, session.col, { focus: true, scroll: true });
+      refreshSearchAfterEdit();
+      showOperationFeedback("已取消本次单元格编辑");
+    }
+    return true;
+  }
+
+  function placeCaretAtEnd(element) {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false);
+    const caret = getSelection();
+    caret?.removeAllRanges();
+    caret?.addRange(range);
+  }
+
+  function activateCellEditing(cell) {
+    if (!cell?.matches?.("td")) return;
+    if (editSession) editSession.editing = true;
+    cell.focus({ preventScroll: true });
+    placeCaretAtEnd(cell);
   }
 
   function paintSelection() {
@@ -287,12 +446,27 @@ import {
     updateSelectionControls();
   }
 
+  function mergeRangeAt(row, col) {
+    const worksheet = model.workbook.Sheets[currentSheet().name];
+    return (worksheet["!merges"] || []).find(
+      (merge) => row >= merge.s.r && row <= merge.e.r && col >= merge.s.c && col <= merge.e.c
+    ) || null;
+  }
+
+  function normalizedCellPosition(row, col) {
+    const merge = mergeRangeAt(row, col);
+    return merge ? { row: merge.s.r, col: merge.s.c } : { row, col };
+  }
+
   function setSelection(row, col, { extend = false, focus = false, scroll = false } = {}) {
     const sheet = currentSheet();
     if (!sheet) return;
     const { rows, cols } = sheetDimensions(sheet);
-    const nextRow = Math.max(0, Math.min(rows - 1, row));
-    const nextCol = Math.max(0, Math.min(cols - 1, col));
+    const clampedRow = Math.max(0, Math.min(rows - 1, row));
+    const clampedCol = Math.max(0, Math.min(cols - 1, col));
+    const normalized = normalizedCellPosition(clampedRow, clampedCol);
+    const nextRow = normalized.row;
+    const nextCol = normalized.col;
     if (!extend) {
       selectionKind = "cells";
       selection.anchorRow = nextRow;
@@ -335,6 +509,23 @@ import {
     paintSelection();
   }
 
+  function closeStructureContextMenu() {
+    structureContextMenu.hidden = true;
+    contextStructureAxis = null;
+  }
+
+  function openStructureContextMenu(axis, clientX, clientY) {
+    if (!editMode || structureBusy) return;
+    contextStructureAxis = axis;
+    updateStructureActionLabels();
+    structureContextMenu.hidden = false;
+    const width = structureContextMenu.offsetWidth;
+    const height = structureContextMenu.offsetHeight;
+    structureContextMenu.style.left = `${Math.max(8, Math.min(clientX, innerWidth - width - 8))}px`;
+    structureContextMenu.style.top = `${Math.max(8, Math.min(clientY, innerHeight - height - 8))}px`;
+    contextStructureInsert.focus({ preventScroll: true });
+  }
+
   function updateSearchHighlights() {
     grid.querySelectorAll("td.search-match,td.search-current").forEach((cell) => {
       cell.classList.remove("search-match", "search-current");
@@ -348,9 +539,18 @@ import {
       : lastSearchQuery ? "0/0" : "";
   }
 
+  function searchOptionsKey() {
+    return `${findCase.checked}:${findSelection.checked}:${findFormulas.checked}`;
+  }
+
+  function normalizedSearchText(value) {
+    return findCase.checked ? String(value) : String(value).toLocaleLowerCase();
+  }
+
   function collectSearchMatches(query) {
-    const normalized = query.trim().toLocaleLowerCase();
+    const normalized = normalizedSearchText(query.trim());
     lastSearchQuery = query;
+    lastSearchOptions = searchOptionsKey();
     if (!normalized) {
       searchMatches = [];
       searchIndex = -1;
@@ -359,11 +559,18 @@ import {
     }
     const sheet = currentSheet();
     const { rows, cols } = sheetDimensions(sheet);
+    const bounds = findSelection.checked
+      ? (searchSelectionScope || selectionBounds())
+      : { startRow: 0, endRow: rows - 1, startCol: 0, endCol: cols - 1 };
     searchMatches = [];
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const value = String(sheet.data[row]?.[col] ?? "").toLocaleLowerCase();
-        if (value.includes(normalized)) searchMatches.push({ row, col });
+    for (let row = bounds.startRow; row <= Math.min(rows - 1, bounds.endRow); row++) {
+      for (let col = bounds.startCol; col <= Math.min(cols - 1, bounds.endCol); col++) {
+        const input = cellInputText(XLSX, model, sheet.name, row, col);
+        const isFormula = input.startsWith("=");
+        const source = findFormulas.checked && isFormula
+          ? input
+          : String(sheet.data[row]?.[col] ?? "");
+        if (normalizedSearchText(source).includes(normalized)) searchMatches.push({ row, col, source, isFormula });
       }
     }
     searchIndex = searchMatches.length ? 0 : -1;
@@ -372,12 +579,180 @@ import {
 
   function findMatch(direction = 1) {
     const query = findInput.value;
-    if (query !== lastSearchQuery) collectSearchMatches(query);
+    if (query !== lastSearchQuery || searchOptionsKey() !== lastSearchOptions) collectSearchMatches(query);
     if (!searchMatches.length) return;
     searchIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length;
     const match = searchMatches[searchIndex];
     setSelection(match.row, match.col, { focus: true, scroll: true });
     updateSearchHighlights();
+  }
+
+  function replacedText(source, query, replacement, replaceAll) {
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return source.replace(new RegExp(escaped, `${findCase.checked ? "" : "i"}${replaceAll ? "g" : ""}`), () => replacement);
+  }
+
+  function replaceSearchMatches(replaceAll) {
+    finalizeEditSession();
+    const query = findInput.value;
+    if (!query) return;
+    if (query !== lastSearchQuery || searchOptionsKey() !== lastSearchOptions) collectSearchMatches(query);
+    if (!searchMatches.length) {
+      showOperationFeedback("没有可替换的匹配项", "warning");
+      return;
+    }
+    const candidates = replaceAll ? searchMatches : [searchMatches[Math.max(0, searchIndex)]];
+    const changes = [];
+    let skippedFormulas = 0;
+    for (const match of candidates) {
+      if (match.isFormula && !findFormulas.checked) {
+        skippedFormulas++;
+        continue;
+      }
+      const next = replacedText(match.source, query, replaceInput.value, replaceAll);
+      if (next !== match.source) changes.push({ row: match.row, col: match.col, value: next });
+    }
+    if (!changes.length) {
+      showOperationFeedback(skippedFormulas ? "公式结果不会被直接替换；可启用“查找公式原文”" : "没有可替换的匹配项", "warning", 3600);
+      return;
+    }
+    const rows = changes.map((change) => change.row);
+    const cols = changes.map((change) => change.col);
+    const startRow = Math.min(...rows);
+    const endRow = Math.max(...rows);
+    const startCol = Math.min(...cols);
+    const endCol = Math.max(...cols);
+    const sheet = currentSheet();
+    const history = {
+      sheet: sheet.name,
+      row: startRow,
+      col: startCol,
+      rows: endRow - startRow + 1,
+      cols: endCol - startCol + 1,
+      before: captureCellRange(XLSX, model, sheet.name, startRow, startCol, endRow - startRow + 1, endCol - startCol + 1)
+    };
+    setCellsText(XLSX, model, sheet.name, changes);
+    history.after = captureCellRange(XLSX, model, sheet.name, startRow, startCol, history.rows, history.cols);
+    pushHistory(history);
+    selectionKind = "cells";
+    selection = { anchorRow: startRow, anchorCol: startCol, row: endRow, col: endCol };
+    scheduleSave();
+    renderGrid();
+    collectSearchMatches(query);
+    showOperationFeedback(`已替换 ${changes.length} 个单元格${skippedFormulas ? `，跳过 ${skippedFormulas} 个公式结果` : ""}`);
+  }
+
+  const FORMULA_HINTS = {
+    SUM: "SUM(数值或区域…)：求和",
+    AVERAGE: "AVERAGE(数值或区域…)：平均值",
+    MIN: "MIN(数值或区域…)：最小值",
+    MAX: "MAX(数值或区域…)：最大值",
+    COUNT: "COUNT(数值或区域…)：数字数量",
+    ROUND: "ROUND(数值, 位数)：四舍五入",
+    ABS: "ABS(数值)：绝对值",
+    IF: "IF(条件, 成立值, 不成立值)：条件判断"
+  };
+
+  function updateFormulaHelp(value = formulaInput.value) {
+    const source = String(value || "").trim();
+    if (!source.startsWith("=")) {
+      formulaHelp.hidden = true;
+      formulaHelp.textContent = "";
+      hideFormulaSuggestions();
+      return;
+    }
+    const functionName = /^=\s*([A-Za-z]+)/.exec(source)?.[1]?.toUpperCase();
+    formulaHelp.textContent = FORMULA_HINTS[functionName]
+      || "支持 + − × ÷、单元格引用及 SUM / AVERAGE / MIN / MAX / COUNT / ROUND / ABS / IF";
+    formulaHelp.hidden = false;
+    updateFormulaSuggestions(source);
+  }
+
+  function hideFormulaSuggestions() {
+    formulaSuggestionMenu.hidden = true;
+    formulaSuggestionMenu.replaceChildren();
+    formulaSuggestionIndex = -1;
+  }
+
+  function positionFormulaSuggestions() {
+    const rect = formulaInput.getBoundingClientRect();
+    const width = Math.min(Math.max(240, rect.width), Math.max(160, innerWidth - 16));
+    const left = Math.max(8, Math.min(rect.left, innerWidth - width - 8));
+    formulaSuggestionMenu.style.left = `${left}px`;
+    formulaSuggestionMenu.style.top = `${rect.bottom + (formulaHelp.hidden ? 4 : 24)}px`;
+    formulaSuggestionMenu.style.width = `${width}px`;
+  }
+
+  function formulaSuggestionButtons() {
+    return [...formulaSuggestionMenu.querySelectorAll("button")];
+  }
+
+  function setFormulaSuggestionIndex(index) {
+    const buttons = formulaSuggestionButtons();
+    if (!buttons.length) return;
+    formulaSuggestionIndex = (index + buttons.length) % buttons.length;
+    buttons.forEach((button, buttonIndex) => {
+      const active = buttonIndex === formulaSuggestionIndex;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
+    });
+    buttons[formulaSuggestionIndex].scrollIntoView({ block: "nearest" });
+  }
+
+  function applyFormulaSuggestion(name) {
+    const value = `=${name}()`;
+    formulaInput.value = value;
+    hideFormulaSuggestions();
+    updateFormulaHelp(value);
+    formulaInput.focus({ preventScroll: true });
+    formulaInput.setSelectionRange(value.length - 1, value.length - 1);
+  }
+
+  function updateFormulaSuggestions(source = formulaInput.value) {
+    if (document.activeElement !== formulaInput) {
+      hideFormulaSuggestions();
+      return;
+    }
+    const match = /^=\s*([A-Za-z]*)$/.exec(String(source).trim());
+    if (!match) {
+      hideFormulaSuggestions();
+      return;
+    }
+    const prefix = match[1].toUpperCase();
+    const names = Object.keys(FORMULA_HINTS).filter((name) => name.startsWith(prefix));
+    if (!names.length) {
+      hideFormulaSuggestions();
+      return;
+    }
+    formulaSuggestionMenu.replaceChildren();
+    names.forEach((name, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.role = "option";
+      button.dataset.formula = name;
+      const title = document.createElement("strong");
+      title.textContent = name;
+      const detail = document.createElement("small");
+      detail.textContent = FORMULA_HINTS[name].split("：")[1] || FORMULA_HINTS[name];
+      button.append(title, detail);
+      button.addEventListener("pointerdown", (event) => event.preventDefault());
+      button.addEventListener("click", () => applyFormulaSuggestion(name));
+      button.addEventListener("pointerenter", () => setFormulaSuggestionIndex(index));
+      formulaSuggestionMenu.append(button);
+    });
+    formulaSuggestionMenu.hidden = false;
+    positionFormulaSuggestions();
+    setFormulaSuggestionIndex(0);
+  }
+
+  function formulaErrorHint(value) {
+    return {
+      "#REF!": "引用的单元格已被删除或无效",
+      "#DIV/0!": "除数不能为零",
+      "#VALUE!": "公式中的值类型不正确",
+      "#CYCLE!": "公式出现循环引用",
+      "#暂不支持": "当前轻量公式引擎暂不支持此公式"
+    }[String(value)] || "";
   }
 
   function refreshSearchAfterEdit() {
@@ -393,15 +768,24 @@ import {
     updateSearchHighlights();
   }
 
-  function applyHistory(entry, snapshot, layout) {
+  function applyHistory(entry, snapshot, layout, state, workbookState, selectionState) {
     const sheetIndex = model.sheets.findIndex((sheet) => sheet.name === entry.sheet);
     if (sheetIndex < 0) return false;
     active = sheetIndex;
-    if (snapshot) restoreCellRange(XLSX, model, entry.sheet, entry.row, entry.col, snapshot);
-    if (layout) restoreSheetLayout(model, entry.sheet, layout);
+    if (workbookState) restoreWorkbookState(XLSX, model, workbookState);
+    else if (state) restoreSheetState(XLSX, model, entry.sheet, state);
+    else {
+      if (snapshot) restoreCellRange(XLSX, model, entry.sheet, entry.row, entry.col, snapshot);
+      if (layout) restoreSheetLayout(model, entry.sheet, layout);
+    }
+    if (selectionState) {
+      selectionKind = selectionState.kind;
+      selection = { ...selectionState.selection };
+    }
     scheduleSave();
     render();
-    setSelection(entry.row, entry.col, { focus: true, scroll: true });
+    if (selectionState) focusCurrentSelection();
+    else setSelection(entry.row, entry.col, { focus: true, scroll: true });
     refreshSearchAfterEdit();
     return true;
   }
@@ -411,7 +795,7 @@ import {
     finalizeEditSession();
     const entry = undoStack.pop();
     if (!entry) return;
-    if (applyHistory(entry, entry.before, entry.beforeLayout)) redoStack.push(entry);
+    if (applyHistory(entry, entry.before, entry.beforeLayout, entry.beforeState, entry.beforeWorkbookState, entry.beforeSelection)) redoStack.push(entry);
     updateHistoryButtons();
   }
 
@@ -420,7 +804,7 @@ import {
     finalizeEditSession();
     const entry = redoStack.pop();
     if (!entry) return;
-    if (applyHistory(entry, entry.after, entry.afterLayout)) undoStack.push(entry);
+    if (applyHistory(entry, entry.after, entry.afterLayout, entry.afterState, entry.afterWorkbookState, entry.afterSelection)) undoStack.push(entry);
     updateHistoryButtons();
   }
 
@@ -478,6 +862,103 @@ import {
     td.classList.toggle("text-flow-overflow", presentation.textFlow === "overflow");
   }
 
+  function columnPixelWidth(worksheet, col) {
+    const layout = worksheet["!cols"]?.[col];
+    if (Number.isFinite(layout?.wpx)) return Math.max(40, Math.min(600, Math.round(layout.wpx)));
+    if (Number.isFinite(layout?.wch)) return Math.max(40, Math.min(600, Math.round(layout.wch * 7 + 5)));
+    return 110;
+  }
+
+  function rowPixelHeight(worksheet, row) {
+    const layout = worksheet["!rows"]?.[row];
+    if (Number.isFinite(layout?.hpx)) return Math.max(20, Math.min(240, Math.round(layout.hpx)));
+    if (Number.isFinite(layout?.hpt)) return Math.max(20, Math.min(240, Math.round(layout.hpt * 96 / 72)));
+    return 28;
+  }
+
+  function finishResize(axis, index, value, beforeLayout) {
+    const sheet = currentSheet();
+    if (axis === "col") setColumnWidth(model, sheet.name, index, value);
+    else setRowHeight(model, sheet.name, index, value);
+    const afterLayout = captureSheetLayout(model, sheet.name);
+    pushHistory({
+      sheet: sheet.name,
+      row: axis === "row" ? index : selection.row,
+      col: axis === "col" ? index : selection.col,
+      beforeLayout,
+      afterLayout
+    });
+    scheduleSave();
+    renderGrid();
+  }
+
+  function startResize(axis, index, initialValue, event) {
+    if (!editMode || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    finalizeEditSession();
+    const beforeLayout = captureSheetLayout(model, currentSheet().name);
+    const start = axis === "col" ? event.clientX : event.clientY;
+    const guide = document.createElement("div");
+    guide.className = `resize-guide ${axis === "col" ? "vertical" : "horizontal"}`;
+    if (axis === "col") guide.style.left = `${event.clientX}px`;
+    else guide.style.top = `${event.clientY}px`;
+    document.body.append(guide);
+    document.body.classList.add(axis === "col" ? "resizing-col" : "resizing-row");
+    let latest = initialValue;
+    let moved = false;
+    const move = (moveEvent) => {
+      const current = axis === "col" ? moveEvent.clientX : moveEvent.clientY;
+      moved ||= Math.abs(current - start) >= 2;
+      latest = initialValue + current - start;
+      if (axis === "col") {
+        latest = Math.max(40, Math.min(600, latest));
+        guide.style.left = `${moveEvent.clientX}px`;
+      } else {
+        latest = Math.max(20, Math.min(240, latest));
+        guide.style.top = `${moveEvent.clientY}px`;
+      }
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      guide.remove();
+      document.body.classList.remove("resizing-col", "resizing-row");
+      if (moved && Math.round(latest) !== Math.round(initialValue)) {
+        finishResize(axis, index, latest, beforeLayout);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+    window.addEventListener("pointercancel", end, { once: true });
+  }
+
+  function appendResizeHandle(target, axis, index, initialValue) {
+    if (!editMode) return;
+    const handle = document.createElement("span");
+    handle.className = axis === "col" ? "col-resizer" : "row-resizer";
+    handle.title = axis === "col" ? "拖动调整列宽，双击自动适应内容" : "拖动调整行高，双击恢复默认高度";
+    handle.addEventListener("pointerdown", (event) => startResize(axis, index, initialValue, event));
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (axis === "row") {
+        if (Math.round(initialValue) !== 28) {
+          finishResize(axis, index, 28, captureSheetLayout(model, currentSheet().name));
+        }
+        return;
+      }
+      const sheet = currentSheet();
+      const longest = Math.max(columnName(index).length, ...sheet.data.map((row) => String(row?.[index] ?? "").length));
+      const autoWidth = Math.max(56, Math.min(360, longest * 8 + 22));
+      if (Math.round(autoWidth) !== Math.round(initialValue)) {
+        finishResize(axis, index, autoWidth, captureSheetLayout(model, currentSheet().name));
+      }
+    });
+    target.append(handle);
+  }
+
   function previewFillTo(row, col) {
     if (!fillDrag) return;
     const source = fillDrag.source;
@@ -502,6 +983,21 @@ import {
     const worksheet = model.workbook.Sheets[sheet.name];
     const { rows, cols, truncatedRows, truncatedCols } = sheetDimensions(sheet);
     const freeze = sheet.freeze || { rows: 0, cols: 0 };
+    const columnWidths = Array.from({ length: cols }, (_, col) => columnPixelWidth(worksheet, col));
+    const rowHeights = Array.from({ length: rows }, (_, row) => rowPixelHeight(worksheet, row));
+    const columnOffsets = columnWidths.map((_, col) => 46 + columnWidths.slice(0, col).reduce((sum, width) => sum + width, 0));
+    const rowOffsets = rowHeights.map((_, row) => 28 + rowHeights.slice(0, row).reduce((sum, height) => sum + height, 0));
+    grid.style.width = `${46 + columnWidths.reduce((sum, width) => sum + width, 0)}px`;
+    const colgroup = document.createElement("colgroup");
+    const rowHeaderCol = document.createElement("col");
+    rowHeaderCol.style.width = "46px";
+    colgroup.append(rowHeaderCol);
+    for (const width of columnWidths) {
+      const colElement = document.createElement("col");
+      colElement.style.width = `${width}px`;
+      colgroup.append(colElement);
+    }
+    grid.append(colgroup);
     const mergeStarts = new Map();
     const mergeCovered = new Set();
     for (const merge of worksheet["!merges"] || []) {
@@ -528,13 +1024,32 @@ import {
       const th = document.createElement("th");
       th.textContent = columnName(col);
       th.dataset.col = String(col);
+      th.tabIndex = 0;
+      th.setAttribute("aria-label", `选择 ${columnName(col)} 列`);
+      th.style.width = `${columnWidths[col]}px`;
       th.addEventListener("pointerdown", (event) => {
-        if (event.button === 0) selectWholeColumn(col, event.shiftKey);
+        if (event.button !== 0) return;
+        event.preventDefault();
+        closeStructureContextMenu();
+        selectWholeColumn(col, event.shiftKey);
+        th.focus({ preventScroll: true });
+        headerDrag = { axis: "col" };
+      });
+      th.addEventListener("pointerenter", (event) => {
+        if (headerDrag?.axis === "col" && (event.buttons & 1)) selectWholeColumn(col, true);
+      });
+      th.addEventListener("contextmenu", (event) => {
+        if (!editMode) return;
+        event.preventDefault();
+        const bounds = selectionBounds();
+        if (selectionKind !== "cols" || col < bounds.startCol || col > bounds.endCol) selectWholeColumn(col);
+        openStructureContextMenu("col", event.clientX, event.clientY);
       });
       if (col < freeze.cols) {
-        th.style.left = `${46 + col * 110}px`;
+        th.style.left = `${columnOffsets[col]}px`;
         th.style.zIndex = "5";
       }
+      appendResizeHandle(th, "col", col, columnWidths[col]);
       headRow.append(th);
     }
     head.append(headRow);
@@ -543,18 +1058,38 @@ import {
     const body = document.createElement("tbody");
     for (let row = 0; row < rows; row++) {
       const tr = document.createElement("tr");
+      tr.style.height = `${rowHeights[row]}px`;
       if (worksheet["!rows"]?.[row]?.hidden) tr.hidden = true;
       const rowHead = document.createElement("th");
       rowHead.className = "row-head";
       rowHead.dataset.row = String(row);
       rowHead.textContent = String(row + 1);
+      rowHead.tabIndex = 0;
+      rowHead.setAttribute("aria-label", `选择第 ${row + 1} 行`);
+      rowHead.style.height = `${rowHeights[row]}px`;
       rowHead.addEventListener("pointerdown", (event) => {
-        if (event.button === 0) selectWholeRow(row, event.shiftKey);
+        if (event.button !== 0) return;
+        event.preventDefault();
+        closeStructureContextMenu();
+        selectWholeRow(row, event.shiftKey);
+        rowHead.focus({ preventScroll: true });
+        headerDrag = { axis: "row" };
+      });
+      rowHead.addEventListener("pointerenter", (event) => {
+        if (headerDrag?.axis === "row" && (event.buttons & 1)) selectWholeRow(row, true);
+      });
+      rowHead.addEventListener("contextmenu", (event) => {
+        if (!editMode) return;
+        event.preventDefault();
+        const bounds = selectionBounds();
+        if (selectionKind !== "rows" || row < bounds.startRow || row > bounds.endRow) selectWholeRow(row);
+        openStructureContextMenu("row", event.clientX, event.clientY);
       });
       if (row < freeze.rows) {
-        rowHead.style.top = `${28 + row * 28}px`;
+        rowHead.style.top = `${rowOffsets[row]}px`;
         rowHead.style.zIndex = "4";
       }
+      appendResizeHandle(rowHead, "row", row, rowHeights[row]);
       tr.append(rowHead);
       for (let col = 0; col < cols; col++) {
         if (mergeCovered.has(`${row}:${col}`)) continue;
@@ -563,7 +1098,10 @@ import {
         td.tabIndex = 0;
         td.dataset.row = String(row);
         td.dataset.col = String(col);
+        td.style.height = `${rowHeights[row]}px`;
         td.textContent = String(sheet.data[row]?.[col] ?? "");
+        const errorHint = formulaErrorHint(td.textContent);
+        if (errorHint) td.title = errorHint;
         const address = XLSX.utils.encode_cell({ r: row, c: col });
         const merge = mergeStarts.get(`${row}:${col}`);
         if (merge) {
@@ -574,13 +1112,13 @@ import {
         styleGridCell(td, cellPresentation(XLSX, model, sheet.name, row, col));
         if (row < freeze.rows) {
           td.style.position = "sticky";
-          td.style.top = `${28 + row * 28}px`;
+          td.style.top = `${rowOffsets[row]}px`;
           td.style.zIndex = col < freeze.cols ? "6" : "3";
           if (!td.style.backgroundColor) td.style.backgroundColor = "var(--cell-bg)";
         }
         if (col < freeze.cols) {
           td.style.position = "sticky";
-          td.style.left = `${46 + col * 110}px`;
+          td.style.left = `${columnOffsets[col]}px`;
           td.style.zIndex = row < freeze.rows ? "6" : "2";
           if (!td.style.backgroundColor) td.style.backgroundColor = "var(--cell-bg)";
         }
@@ -606,17 +1144,35 @@ import {
               row,
               col,
               before: captureCellRange(XLSX, model, sheet.name, row, col, 1, 1),
-              dirty: false
+              operationIndex: model.operations.length,
+              dirty: false,
+              editing: false
             };
           }
           const inputText = cellInputText(XLSX, model, sheet.name, row, col);
           if (inputText !== td.textContent) td.textContent = inputText;
           formulaInput.value = inputText;
+          updateFormulaHelp(inputText);
+        });
+        td.addEventListener("dblclick", () => activateCellEditing(td));
+        td.addEventListener("beforeinput", (event) => {
+          if (editSession?.editing) return;
+          if (event.inputType !== "insertText" && event.inputType !== "insertCompositionText") return;
+          td.textContent = "";
+          if (editSession) editSession.editing = true;
         });
         td.addEventListener("input", () => {
-          setCellText(XLSX, model, sheet.name, row, col, td.textContent ?? "");
-          if (editSession) editSession.dirty = true;
+          const inputValue = td.textContent ?? "";
+          setCellText(XLSX, model, sheet.name, row, col, inputValue, false);
+          if (editSession) {
+            const recoveryOperation = { type: "setCell", sheet: sheet.name, row, col, value: inputValue };
+            if (editSession.dirty) model.operations[editSession.operationIndex] = recoveryOperation;
+            else model.operations.splice(editSession.operationIndex, 0, recoveryOperation);
+            editSession.dirty = true;
+            editSession.editing = true;
+          }
           formulaInput.value = td.textContent ?? "";
+          updateFormulaHelp(formulaInput.value);
           const editedCell = worksheet[address];
           if (typeof editedCell?.f === "string") td.dataset.formula = "true";
           else delete td.dataset.formula;
@@ -628,6 +1184,7 @@ import {
           });
           scheduleSave();
           refreshSearchAfterEdit();
+          updateSelectionSummary();
         });
         td.addEventListener("blur", () => {
           finalizeEditSession();
@@ -802,18 +1359,35 @@ import {
     }
   }
 
-  function exportWorkbook() {
+  async function exportWorkbook() {
+    if (exportBusy) return;
+    exportBusy = true;
+    exportButton.disabled = true;
     finalizeEditSession();
-    const bytes = withCanonicalReadView(() => serializeWorkbookModel(XLSX, model));
-    const url = URL.createObjectURL(new Blob([bytes], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = assetFileName.toLowerCase().endsWith(".xlsx") ? assetFileName : `${documentTitle}.xlsx`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus("已导出 .xlsx");
+    showOperationFeedback("正在生成并校验 .xlsx…", "working", 0);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    try {
+      const bytes = withCanonicalReadView(() => serializeWorkbookModel(XLSX, model));
+      const verified = withCanonicalReadView(() => validateSerializedWorkbook(XLSX, model, bytes));
+      const url = URL.createObjectURL(new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = assetFileName.toLowerCase().endsWith(".xlsx") ? assetFileName : `${documentTitle}.xlsx`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const message = `已校验并导出 .xlsx（${verified.sheetCount} 个 Sheet、${verified.formulaCount} 个公式）`;
+      setStatus(message);
+      showOperationFeedback(message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`导出失败：${message}`);
+      showOperationFeedback(`导出失败：${message}`, "warning", 4800);
+    } finally {
+      exportBusy = false;
+      exportButton.disabled = false;
+    }
   }
 
   async function persist(force) {
@@ -822,6 +1396,7 @@ import {
       return;
     }
     saveInFlight = true;
+    lastSaveError = "";
     let overwriteConflict = false;
     const operationCount = model.operations.length;
     try {
@@ -836,10 +1411,12 @@ import {
     } catch (error) {
       console.error(error);
       if (error instanceof SaveConflictError) {
-        setStatus("保存冲突：思源附件已有新版本，本机修改已保留");
+        lastSaveError = "思源附件已有新版本，本机修改已保留";
+        setStatus(`保存冲突：${lastSaveError}`);
         overwriteConflict = confirm("思源附件已在其他页面或设备发生变化。确定用当前页面内容覆盖远端版本吗？");
       } else {
-        setStatus(`保存失败（本机修改已保留）：${error instanceof Error ? error.message : String(error)}`);
+        lastSaveError = error instanceof Error ? error.message : String(error);
+        setStatus(`保存失败（本机修改已保留）：${lastSaveError}`);
       }
     } finally {
       saveInFlight = false;
@@ -872,6 +1449,12 @@ import {
       await persist(false);
       while (saveInFlight || saveAgain) {
         await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (lastSaveError) {
+        const message = `无法结束编辑：${lastSaveError}`;
+        setStatus(message);
+        showOperationFeedback(message, "warning", 4800);
+        return;
       }
       editMode = false;
       readViewSnapshots.clear();
@@ -949,6 +1532,7 @@ import {
   }
 
   function commitFormulaBar() {
+    updateFormulaHelp("");
     if (!formulaSession || !model) return;
     const session = formulaSession;
     formulaSession = null;
@@ -1085,7 +1669,7 @@ import {
     refreshSearchAfterEdit();
   }
 
-  function pasteTable(text) {
+  async function pasteTable(text) {
     finalizeEditSession();
     let values = parseClipboardTable(text);
     const startRow = selection.row;
@@ -1096,9 +1680,10 @@ import {
     const originalCols = Math.max(0, ...values.map((row) => row.length));
     values = values.slice(0, availableRows).map((row) => row.slice(0, availableCols));
     if (!values.length || !values[0]?.length) return;
-    if (values.length < originalRows || values[0].length < originalCols) {
-      alert(`粘贴内容超过 ${MAX_RENDER_ROWS} 行 × ${MAX_RENDER_COLS} 列限制，超出部分未写入`);
-    }
+    const truncatedRows = Math.max(0, originalRows - values.length);
+    const truncatedCols = Math.max(0, originalCols - Math.max(0, ...values.map((row) => row.length)));
+    showOperationFeedback(`正在粘贴 ${values.length} 行 × ${Math.max(0, ...values.map((row) => row.length))} 列…`, "working", 0);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const sheet = currentSheet();
     const rowCount = values.length;
     const colCount = values[0].length;
@@ -1116,19 +1701,78 @@ import {
     renderGrid();
     setSelection(selection.row, selection.col, { extend: true, focus: true, scroll: true });
     refreshSearchAfterEdit();
+    const writtenCells = rowCount * colCount;
+    if (truncatedRows || truncatedCols) {
+      showOperationFeedback(`已写入 ${writtenCells} 个单元格；受轻量编辑上限影响，省略 ${truncatedRows} 行、${truncatedCols} 列`, "warning", 4200);
+    } else {
+      showOperationFeedback(`已粘贴 ${rowCount} 行 × ${colCount} 列（${writtenCells} 个单元格）`);
+    }
   }
 
   function moveSelection(rowDelta, colDelta, extend = false) {
     finalizeEditSession();
-    setSelection(selection.row + rowDelta, selection.col + colDelta, {
+    const currentMerge = mergeRangeAt(selection.row, selection.col);
+    const targetRow = currentMerge && rowDelta > 0 ? currentMerge.e.r + rowDelta : selection.row + rowDelta;
+    const targetCol = currentMerge && colDelta > 0 ? currentMerge.e.c + colDelta : selection.col + colDelta;
+    setSelection(targetRow, targetCol, {
       extend,
       focus: true,
       scroll: true
     });
   }
 
+  function moveSelectionTo(row, col, extend = false) {
+    finalizeEditSession();
+    setSelection(row, col, { extend, focus: true, scroll: true });
+  }
+
+  function usedRangeEnd() {
+    const sheet = currentSheet();
+    const worksheet = model.workbook.Sheets[sheet.name];
+    let range;
+    try {
+      range = XLSX.utils.decode_range(worksheet["!ref"] || "A1:A1");
+    } catch {
+      range = { e: { r: 0, c: 0 } };
+    }
+    const dimensions = sheetDimensions(sheet);
+    return {
+      row: Math.max(0, Math.min(dimensions.rows - 1, range.e.r)),
+      col: Math.max(0, Math.min(dimensions.cols - 1, range.e.c))
+    };
+  }
+
+  function cellHasContent(row, col) {
+    return String(currentSheet().data[row]?.[col] ?? "") !== "";
+  }
+
+  function jumpToDataEdge(row, col, rowDelta, colDelta) {
+    const dimensions = sheetDimensions(currentSheet());
+    const lastRow = dimensions.rows - 1;
+    const lastCol = dimensions.cols - 1;
+    const startHasContent = cellHasContent(row, col);
+    let nextRow = row;
+    let nextCol = col;
+    const canMove = () => {
+      const candidateRow = nextRow + rowDelta;
+      const candidateCol = nextCol + colDelta;
+      return candidateRow >= 0 && candidateRow <= lastRow && candidateCol >= 0 && candidateCol <= lastCol;
+    };
+    while (canMove()) {
+      const candidateRow = nextRow + rowDelta;
+      const candidateCol = nextCol + colDelta;
+      const candidateHasContent = cellHasContent(candidateRow, candidateCol);
+      if (startHasContent && !candidateHasContent) break;
+      nextRow = candidateRow;
+      nextCol = candidateCol;
+      if (!startHasContent && candidateHasContent) break;
+    }
+    return { row: nextRow, col: nextCol };
+  }
+
   function handleGridKeydown(event) {
     const modifier = event.ctrlKey || event.metaKey;
+    const targetCell = event.target instanceof HTMLElement ? event.target.closest("td") : null;
     if (modifier && event.key.toLowerCase() === "z") {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
@@ -1137,6 +1781,34 @@ import {
     if (modifier && event.key.toLowerCase() === "y") {
       event.preventDefault();
       redo();
+      return;
+    }
+    if (event.key === "Escape" && editSession) {
+      event.preventDefault();
+      cancelEditSession();
+      return;
+    }
+    if (event.key === "F2" && targetCell) {
+      event.preventDefault();
+      activateCellEditing(targetCell);
+      return;
+    }
+    const directTextInput = targetCell
+      && selectionKind === "cells"
+      && !modifier
+      && !event.altKey
+      && !event.isComposing
+      && event.key.length === 1
+      && !editSession?.editing;
+    if (directTextInput) {
+      event.preventDefault();
+      targetCell.textContent = event.key;
+      targetCell.dispatchEvent(new InputEvent("input", {
+        bubbles: false,
+        inputType: "insertText",
+        data: event.key
+      }));
+      placeCaretAtEnd(targetCell);
       return;
     }
     if (editMode && event.key === "Delete") {
@@ -1154,6 +1826,16 @@ import {
       moveSelection(0, event.shiftKey ? -1 : 1);
       return;
     }
+    if ((event.key === "Home" || event.key === "End") && !editSession?.editing) {
+      event.preventDefault();
+      const usedEnd = usedRangeEnd();
+      if (event.key === "Home") {
+        moveSelectionTo(modifier ? 0 : selection.row, 0, event.shiftKey);
+      } else {
+        moveSelectionTo(modifier ? usedEnd.row : selection.row, usedEnd.col, event.shiftKey);
+      }
+      return;
+    }
     const arrows = {
       ArrowUp: [-1, 0],
       ArrowDown: [1, 0],
@@ -1161,48 +1843,108 @@ import {
       ArrowRight: [0, 1]
     };
     const movement = arrows[event.key];
-    if (movement && (!editSession?.dirty || modifier)) {
+    if (movement && !editSession?.editing && (!editSession?.dirty || modifier)) {
       event.preventDefault();
-      moveSelection(movement[0], movement[1], event.shiftKey);
+      if (modifier) {
+        const target = jumpToDataEdge(selection.row, selection.col, movement[0], movement[1]);
+        moveSelectionTo(target.row, target.col, event.shiftKey);
+      } else {
+        moveSelection(movement[0], movement[1], event.shiftKey);
+      }
     }
   }
 
-  function focusNewCell({ row, col }) {
-    requestAnimationFrame(() => {
-      const wrapper = document.querySelector(".grid-wrap");
-      if (row != null) wrapper.scrollTop = wrapper.scrollHeight;
-      if (col != null) wrapper.scrollLeft = wrapper.scrollWidth;
-      const cell = grid.querySelector(
-        `tbody tr:nth-child(${(row ?? 0) + 1}) td:nth-child(${(col ?? 0) + 2})`
-      );
-      cell?.focus();
-    });
-  }
-
-  function addRow() {
+  async function mutateStructure(axis, mode) {
+    if (structureBusy) return;
+    finalizeEditSession();
     const sheet = model.sheets[active];
-    const { rows, truncatedRows } = sheetDimensions(sheet);
-    if (truncatedRows) {
-      alert("该工作表已超过当前可视行数限制，超出区域会保留但请使用 Excel 编辑");
+    const dimensions = sheetDimensions(sheet);
+    const truncated = axis === "row" ? dimensions.truncatedRows : dimensions.truncatedCols;
+    if (truncated) {
+      const message = `该工作表已超过当前可视${axis === "row" ? "行" : "列"}数限制；为避免误改未显示内容，本次操作未执行`;
+      setStatus(message);
+      showOperationFeedback(message, "warning", 3600);
       return;
     }
-    sheet.viewRows = rows + 1;
-    scheduleSave();
-    renderGrid();
-    focusNewCell({ row: rows, col: 0 });
-  }
-
-  function addColumn() {
-    const sheet = model.sheets[active];
-    const { cols, truncatedCols } = sheetDimensions(sheet);
-    if (truncatedCols) {
-      alert("该工作表已超过当前可视列数限制，超出区域会保留但请使用 Excel 编辑");
+    const { index, count, range } = structureSelection(axis);
+    const visibleCount = axis === "row" ? dimensions.rows : dimensions.cols;
+    const limit = axis === "row" ? MAX_RENDER_ROWS : MAX_RENDER_COLS;
+    if (mode === "insert" && visibleCount + count > limit) {
+      const message = `插入后将超过 ${limit} ${axis === "row" ? "行" : "列"}的轻量编辑限制，本次操作未执行`;
+      setStatus(message);
+      showOperationFeedback(message, "warning", 3600);
       return;
     }
-    sheet.viewCols = cols + 1;
-    scheduleSave();
-    renderGrid();
-    focusNewCell({ row: 0, col: cols });
+    const noun = axis === "row" ? "行" : "列";
+    if (mode === "delete" && count > 1 && !confirm(`确定删除选中的 ${count} ${noun}（${range}）吗？该操作可以撤销。`)) {
+      showOperationFeedback(`已取消删除 ${count} ${noun}`);
+      return;
+    }
+    const beforeSelection = { kind: selectionKind, selection: { ...selection } };
+    const verb = mode === "insert" ? "插入" : "删除";
+    setStructureBusy(true);
+    document.querySelector("#structure-menu").open = false;
+    closeStructureContextMenu();
+    showOperationFeedback(`正在${verb} ${count} ${noun}…`, "working", 0);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    let beforeWorkbookState;
+    const wrapper = document.querySelector(".grid-wrap");
+    const previousScroll = { top: wrapper.scrollTop, left: wrapper.scrollLeft };
+    try {
+      beforeWorkbookState = captureWorkbookState(model, sheet.name);
+      if (axis === "row" && mode === "insert") insertRows(XLSX, model, sheet.name, index, count);
+      else if (axis === "row") deleteRows(XLSX, model, sheet.name, index, count);
+      else if (mode === "insert") insertColumns(XLSX, model, sheet.name, index, count);
+      else deleteColumns(XLSX, model, sheet.name, index, count);
+      const afterWorkbookState = captureWorkbookState(model, sheet.name);
+      const nextDimensions = sheetDimensions(currentSheet());
+      const selectedCount = mode === "insert" ? count : 1;
+      if (axis === "row") {
+        const row = Math.min(index, nextDimensions.rows - 1);
+        selectionKind = "rows";
+        selection = {
+          anchorRow: row,
+          row: Math.min(nextDimensions.rows - 1, row + selectedCount - 1),
+          anchorCol: 0,
+          col: nextDimensions.cols - 1
+        };
+      } else {
+        const col = Math.min(index, nextDimensions.cols - 1);
+        selectionKind = "cols";
+        selection = {
+          anchorRow: 0,
+          row: nextDimensions.rows - 1,
+          anchorCol: col,
+          col: Math.min(nextDimensions.cols - 1, col + selectedCount - 1)
+        };
+      }
+      const afterSelection = { kind: selectionKind, selection: { ...selection } };
+      pushHistory({
+        sheet: sheet.name,
+        row: axis === "row" ? index : selection.row,
+        col: axis === "col" ? index : selection.col,
+        beforeWorkbookState,
+        afterWorkbookState,
+        beforeSelection,
+        afterSelection
+      });
+      scheduleSave();
+      renderGrid();
+      wrapper.scrollTop = previousScroll.top;
+      wrapper.scrollLeft = previousScroll.left;
+      focusCurrentSelection();
+      refreshSearchAfterEdit();
+      showOperationFeedback(`已${verb} ${count} ${noun}（${range}）`);
+    } catch (error) {
+      if (beforeWorkbookState) restoreWorkbookState(XLSX, model, beforeWorkbookState, false);
+      const message = `${verb}失败：${error instanceof Error ? error.message : String(error)}`;
+      console.error(error);
+      setStatus(message);
+      showOperationFeedback(message, "warning", 4200);
+      renderGrid();
+    } finally {
+      setStructureBusy(false);
+    }
   }
 
   async function load() {
@@ -1229,24 +1971,47 @@ import {
     };
   }
 
-  document.querySelector("#add-row").addEventListener("click", addRow);
-  document.querySelector("#add-col").addEventListener("click", addColumn);
+  document.querySelector("#insert-row").addEventListener("click", () => void mutateStructure("row", "insert"));
+  document.querySelector("#delete-row").addEventListener("click", () => void mutateStructure("row", "delete"));
+  document.querySelector("#insert-col").addEventListener("click", () => void mutateStructure("col", "insert"));
+  document.querySelector("#delete-col").addEventListener("click", () => void mutateStructure("col", "delete"));
+  contextStructureInsert.addEventListener("click", () => {
+    const axis = contextStructureAxis;
+    if (axis) void mutateStructure(axis, "insert");
+  });
+  contextStructureDelete.addEventListener("click", () => {
+    const axis = contextStructureAxis;
+    if (axis) void mutateStructure(axis, "delete");
+  });
   formulaInput.addEventListener("focus", () => {
     finalizeEditSession();
     formulaSession = { sheet: currentSheet().name, row: selection.row, col: selection.col };
+    updateFormulaHelp();
   });
+  formulaInput.addEventListener("input", () => updateFormulaHelp());
   formulaInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    if (!formulaSuggestionMenu.hidden && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      setFormulaSuggestionIndex(formulaSuggestionIndex + (event.key === "ArrowDown" ? 1 : -1));
+    } else if (!formulaSuggestionMenu.hidden && (event.key === "Enter" || event.key === "Tab")) {
+      event.preventDefault();
+      const button = formulaSuggestionButtons()[Math.max(0, formulaSuggestionIndex)];
+      if (button?.dataset.formula) applyFormulaSuggestion(button.dataset.formula);
+    } else if (event.key === "Enter") {
       event.preventDefault();
       commitFormulaBar();
     } else if (event.key === "Escape") {
       event.preventDefault();
       formulaSession = null;
       updateSelectionControls();
+      updateFormulaHelp("");
       cellLocator(selection.row, selection.col)?.focus();
     }
   });
-  formulaInput.addEventListener("blur", commitFormulaBar);
+  formulaInput.addEventListener("blur", () => {
+    hideFormulaSuggestions();
+    commitFormulaBar();
+  });
   for (const [id, property] of [["bold", "bold"], ["italic", "italic"], ["underline", "underline"]]) {
     document.querySelector(`#${id}`).addEventListener("click", () => {
       const { startRow, startCol } = selectionBounds();
@@ -1313,7 +2078,7 @@ import {
       alert(error instanceof Error ? error.message : String(error));
     }
   });
-  document.querySelector("#export").addEventListener("click", exportWorkbook);
+  exportButton.addEventListener("click", () => void exportWorkbook());
   addSheetButton.addEventListener("click", () => {
     if (!editMode) return;
     const name = uniqueName("Sheet");
@@ -1344,10 +2109,11 @@ import {
     const text = event.clipboardData?.getData("text/plain");
     if (text == null) return;
     event.preventDefault();
-    pasteTable(text);
+    void pasteTable(text);
   });
   window.addEventListener("pointerup", () => {
     draggingSelection = false;
+    headerDrag = null;
     if (!fillDrag) return;
     const { source, target } = fillDrag;
     fillDrag = null;
@@ -1373,12 +2139,22 @@ import {
       renderGrid();
     }
   });
+  window.addEventListener("pointercancel", () => {
+    draggingSelection = false;
+    headerDrag = null;
+  });
   findInput.addEventListener("input", () => {
     collectSearchMatches(findInput.value);
     if (searchMatches.length) {
       const match = searchMatches[0];
       setSelection(match.row, match.col, { focus: false, scroll: true });
       updateSearchHighlights();
+    }
+  });
+  replaceInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      replaceSearchMatches(event.ctrlKey || event.metaKey);
     }
   });
   findInput.addEventListener("keydown", (event) => {
@@ -1392,6 +2168,7 @@ import {
     }
   });
   function openSearchPanel() {
+    if (findSelection.checked) searchSelectionScope = { ...selectionBounds() };
     searchPanel.hidden = false;
     document.querySelector("#search-toggle").classList.add("active");
     requestAnimationFrame(() => {
@@ -1402,12 +2179,22 @@ import {
 
   function closeSearchPanel() {
     searchPanel.hidden = true;
+    searchSelectionScope = null;
     document.querySelector("#search-toggle").classList.remove("active");
     cellLocator(selection.row, selection.col)?.focus();
   }
 
   document.querySelector("#find-prev").addEventListener("click", () => findMatch(-1));
   document.querySelector("#find-next").addEventListener("click", () => findMatch(1));
+  replaceOneButton.addEventListener("click", () => replaceSearchMatches(false));
+  replaceAllButton.addEventListener("click", () => replaceSearchMatches(true));
+  findSelection.addEventListener("change", () => {
+    searchSelectionScope = findSelection.checked ? { ...selectionBounds() } : null;
+    collectSearchMatches(findInput.value);
+  });
+  for (const option of [findCase, findFormulas]) {
+    option.addEventListener("change", () => collectSearchMatches(findInput.value));
+  }
   modeToggle.addEventListener("click", () => void setEditMode(!editMode));
   document.querySelector("#search-toggle").addEventListener("click", () => {
     if (searchPanel.hidden) openSearchPanel();
@@ -1434,12 +2221,36 @@ import {
     });
   });
   document.addEventListener("pointerdown", (event) => {
+    if (!structureContextMenu.contains(event.target)) closeStructureContextMenu();
     document.querySelectorAll(".tool-menu[open]").forEach((details) => {
       if (!details.contains(event.target)) details.open = false;
     });
   });
+  document.querySelector(".grid-wrap").addEventListener("scroll", closeStructureContextMenu, { passive: true });
+  window.addEventListener("resize", closeStructureContextMenu);
+  window.addEventListener("resize", () => {
+    if (!formulaSuggestionMenu.hidden) positionFormulaSuggestions();
+  });
   document.addEventListener("keydown", (event) => {
     const modifier = event.ctrlKey || event.metaKey;
+    const structureShortcut = modifier && grid.contains(document.activeElement)
+      && (selectionKind === "rows" || selectionKind === "cols");
+    if (editMode && structureShortcut && (event.key === "+" || (event.key === "=" && event.shiftKey))) {
+      event.preventDefault();
+      void mutateStructure(selectionKind === "rows" ? "row" : "col", "insert");
+      return;
+    }
+    if (editMode && structureShortcut && event.key === "-") {
+      event.preventDefault();
+      void mutateStructure(selectionKind === "rows" ? "row" : "col", "delete");
+      return;
+    }
+    if (event.key === "Escape" && !structureContextMenu.hidden) {
+      event.preventDefault();
+      closeStructureContextMenu();
+      focusCurrentSelection();
+      return;
+    }
     if (modifier && event.key.toLowerCase() === "f") {
       event.preventDefault();
       openSearchPanel();

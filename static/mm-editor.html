@@ -9,16 +9,49 @@
     #map{opacity:0}
     body.layout-ready #map{opacity:1}
     #map .map-container{background:#fff!important}
-    #status,#help,#export,#view-style{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
+    #status,#help,#export,#view-style,#search-toggle,#shortcut-toggle,#focus-exit,#outline-toggle{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
     #status{left:12px;right:auto;bottom:10px}
-    #help{left:72px;right:182px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    #export,#view-style{top:10px;border:0;cursor:pointer}
+    #help{left:136px;right:238px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #export,#view-style,#search-toggle,#shortcut-toggle,#focus-exit,#outline-toggle{top:10px;border:0;cursor:pointer}
+    #search-toggle{left:12px;color:#3f73f1;background:#fff}
+    #shortcut-toggle{left:66px;color:#3f73f1;background:#fff}
+    #focus-exit{display:none;left:136px;color:#fff;background:#3f73f1}
+    body.focus-mode #focus-exit{display:block}
+    body.focus-mode #help{display:none}
     #export{right:12px;color:#3f73f1;background:#fff}
     #view-style{right:88px;color:#3f73f1;background:#fff}
+    #outline-toggle{right:178px;color:#3f73f1;background:#fff}
+    #search-toggle.active,#shortcut-toggle.active,#outline-toggle.active{color:#fff;background:#3f73f1}
     #view-style.active{color:#fff;background:#3f73f1}
+    #workspace-panel{position:fixed;z-index:35;top:50px;right:12px;bottom:12px;display:none;flex-direction:column;width:min(320px,calc(100vw - 24px));overflow:hidden;border:1px solid #e4e7ec;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 10px 30px #10182824;color:#344054;font:13px system-ui}
+    body.workspace-open #workspace-panel{display:flex}
+    #workspace-search-row{display:flex;align-items:center;gap:6px;padding:10px;border-bottom:1px solid #eaecf0}
+    #workspace-search{min-width:0;flex:1;height:32px;box-sizing:border-box;padding:0 10px;border:1px solid #d0d5dd;border-radius:7px;outline:0;color:#344054;background:#fff;font:13px system-ui}
+    #workspace-search:focus{border-color:#3478f6;box-shadow:0 0 0 2px #3478f622}
+    #search-count{min-width:54px;color:#98a2b3;text-align:right;white-space:nowrap}
+    #workspace-close{width:30px;height:30px;padding:0;border:0;border-radius:6px;background:transparent;color:#667085;cursor:pointer;font:18px/30px system-ui}
+    #workspace-close:hover{background:#f2f4f7}
+    #outline-list{flex:1;overflow:auto;padding:7px}
+    .outline-empty{padding:24px 12px;color:#98a2b3;text-align:center}
+    .outline-row{display:flex;align-items:center;min-width:0;padding-left:calc(var(--depth) * 16px)}
+    .outline-expander{display:grid;place-items:center;flex:0 0 22px;width:22px;height:28px;padding:0;border:0;background:transparent;color:#667085;cursor:pointer;font:15px/1 system-ui}
+    .outline-expander.placeholder{visibility:hidden;pointer-events:none}
+    .outline-topic{min-width:0;flex:1;height:30px;overflow:hidden;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#475467;cursor:pointer;text-align:left;text-overflow:ellipsis;white-space:nowrap;font:13px system-ui}
+    .outline-topic:hover{background:#f2f4f7;color:#344054}
+    .outline-row.matched .outline-topic{color:#175cd3;background:#eff8ff}
+    .outline-row.active .outline-topic{color:#fff;background:#3478f6}
+    #shortcut-dialog{position:fixed;z-index:40;top:50px;left:12px;width:min(390px,calc(100vw - 24px));box-sizing:border-box;padding:14px;border:1px solid #e4e7ec;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 10px 30px #10182824;color:#344054;font:13px system-ui}
+    #shortcut-dialog[hidden]{display:none}
+    #shortcut-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600}
+    #shortcut-close{width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#667085;cursor:pointer;font:18px/28px system-ui}
+    #shortcut-close:hover{background:#f2f4f7}
+    #shortcut-grid{display:grid;grid-template-columns:minmax(112px,auto) 1fr;gap:8px 14px;align-items:center}
+    #shortcut-grid kbd{justify-self:start;min-width:64px;padding:3px 7px;border:1px solid #d0d5dd;border-bottom-width:2px;border-radius:5px;background:#f9fafb;color:#475467;text-align:center;font:12px system-ui}
+    #shortcut-grid span{color:#667085}
     #node-tools{position:fixed;z-index:30;left:50%;bottom:18px;transform:translateX(-50%);display:none;align-items:center;gap:5px;padding:7px;background:#25272b;border-radius:8px;box-shadow:0 5px 18px #0004}
     #node-tools button{min-width:30px;height:30px;padding:0 8px;border:0;border-radius:5px;background:transparent;color:#fff;cursor:pointer;font:14px system-ui}
     #node-tools button:hover,#node-tools button.active{background:#ffffff24}
+    #node-tools button:disabled{opacity:.4;cursor:not-allowed}
     #node-tools .color{width:25px;min-width:25px;padding:0;border:2px solid #fff6}
     .quick-add{display:none;pointer-events:auto!important;position:absolute;right:-24px;top:50%;transform:translateY(-50%);width:19px;height:19px;border:0;border-radius:50%;padding:0;background:#3478f6;color:#fff;cursor:pointer;font:bold 16px/18px system-ui;box-shadow:0 1px 3px #0003}
     me-tpc[data-depth="0"]:not(.has-children)>.quick-add{display:block}
@@ -52,26 +85,58 @@
     body.hierarchy-view me-tpc[data-depth]:not([data-depth="0"]):not([data-depth="1"]){display:flex!important;align-items:center!important;min-height:39px;padding:9px 4px!important;border-color:transparent!important;border-radius:0!important;background:#fff!important;color:#98a2b3!important;box-shadow:none!important}
     body.hierarchy-view me-tpc.selected:not([data-depth="0"]){border-radius:7px!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
     body.hierarchy-view me-tpc[data-depth="0"].selected{box-shadow:0 6px 12px #3478f633,0 0 0 2px #fff,0 0 0 4px #3f73f1!important}
-    #input-box{border:0!important;border-radius:7px!important;outline:0!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important}
+    #input-box{box-sizing:border-box!important;min-width:72px!important;max-width:min(480px,calc(100vw - 48px))!important;height:auto!important;min-height:34px!important;border:0!important;border-radius:7px!important;outline:0!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important;white-space:pre-wrap!important;overflow-wrap:anywhere!important;line-height:1.5!important;caret-color:#175cd3}
     body.hierarchy-view .lines path,body.hierarchy-view .subLines path{stroke:#5d85ff!important;stroke-width:2px!important;stroke-linecap:round!important;stroke-linejoin:round!important}
+    @media(max-width:760px){#help{display:none}#outline-toggle{right:178px}#workspace-panel{top:48px;right:8px;bottom:8px;width:calc(100vw - 16px)}#shortcut-dialog{top:48px;left:8px;width:calc(100vw - 16px)}}
   </style>
 </head>
 <body class="hierarchy-view">
   <div id="map"></div>
-  <div id="help">Tab：添加子节点　·　中心主题＋：添加主分支　·　双击：编辑　·　左键拖节点：调整层级　·　右键拖动画布：平移视图</div>
+  <button id="search-toggle" type="button" aria-controls="workspace-panel" aria-expanded="false">查找</button>
+  <button id="shortcut-toggle" type="button" aria-controls="shortcut-dialog" aria-expanded="false">快捷键</button>
+  <button id="focus-exit" type="button">返回完整脑图</button>
+  <div id="help">Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开　·　?：快捷键</div>
+  <button id="outline-toggle" type="button" aria-controls="workspace-panel" aria-expanded="false">大纲</button>
   <button id="view-style" type="button" aria-pressed="false">层级样式</button>
   <button id="export" type="button">导出 .mm</button>
+  <aside id="workspace-panel" aria-label="脑图查找与大纲">
+    <div id="workspace-search-row">
+      <input id="workspace-search" type="search" placeholder="查找节点（Ctrl+F）" autocomplete="off" spellcheck="false">
+      <span id="search-count" aria-live="polite">全部节点</span>
+      <button id="workspace-close" type="button" aria-label="关闭查找与大纲">×</button>
+    </div>
+    <div id="outline-list" role="tree" aria-label="节点大纲"></div>
+  </aside>
+  <section id="shortcut-dialog" role="dialog" aria-label="脑图快捷键" hidden>
+    <div id="shortcut-header"><span>脑图快捷键</span><button id="shortcut-close" type="button" aria-label="关闭快捷键">×</button></div>
+    <div id="shortcut-grid">
+      <kbd>Tab</kbd><span>添加子节点并直接输入</span>
+      <kbd>Enter</kbd><span>在后面添加同级节点</span>
+      <kbd>Shift + Enter</kbd><span>在前面添加同级节点</span>
+      <kbd>Ctrl + Enter</kbd><span>插入父节点</span>
+      <kbd>F2</kbd><span>编辑当前节点</span>
+      <kbd>方向键</kbd><span>在节点间移动</span>
+      <kbd>Alt + ↑ / ↓</kbd><span>调整同级节点顺序</span>
+      <kbd>Ctrl + /</kbd><span>收起或展开当前分支</span>
+      <kbd>Ctrl + Home</kbd><span>回到中心主题</span>
+      <kbd>Esc</kbd><span>退出分支聚焦</span>
+      <kbd>Ctrl + F / F3</kbd><span>查找 / 下一个结果</span>
+      <kbd>Ctrl + Z / Y</kbd><span>撤销 / 重做</span>
+      <kbd>Delete</kbd><span>删除所选节点</span>
+    </div>
+  </section>
   <div id="node-tools" aria-label="节点格式工具栏">
     <button type="button" data-action="bold" title="加粗"><b>B</b></button>
     <button type="button" data-action="italic" title="斜体"><i>I</i></button>
     <button type="button" data-action="underline" title="下划线"><u>U</u></button>
     <button type="button" data-action="task" title="切换完成状态" aria-pressed="false">✓ 完成</button>
+    <button type="button" data-action="focus" title="仅显示当前分支">聚焦分支</button>
     <button type="button" class="color" data-color="#ef9a9a" style="background:#ef9a9a" title="红色"></button>
     <button type="button" class="color" data-color="#90caf9" style="background:#90caf9" title="蓝色"></button>
     <button type="button" class="color" data-color="#80cbc4" style="background:#80cbc4" title="绿色"></button>
     <button type="button" data-action="clear" title="清除格式">清除</button>
   </div>
   <div id="status">正在加载…</div>
-  <script type="module" src="./mm-editor.js?v=__PLUGIN_VERSION__-mm35"></script>
+  <script type="module" src="./mm-editor.js?v=__PLUGIN_VERSION__-mm47"></script>
 </body>
 </html>

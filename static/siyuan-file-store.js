@@ -250,6 +250,12 @@ export class SiyuanFileStore {
     const result = await response.json();
     if (result.code !== 0) throw new Error(result.msg || `写入思源失败：${result.code}`);
 
+    const verified = await this.fetchRemote();
+    const verifiedHash = await contentHash(verified);
+    if (verifiedHash !== desiredHash) {
+      throw new Error("写入思源后的附件校验失败，本机恢复数据已保留");
+    }
+
     const syncMarked = await this.tryMarkForSync(desiredHash);
 
     this.baseHash = desiredHash;

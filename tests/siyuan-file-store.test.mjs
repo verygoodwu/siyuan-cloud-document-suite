@@ -77,7 +77,7 @@ test("a completed putFile remains successful when the optional sync marker fails
     restores.reverse().forEach((restore) => restore());
   });
 
-  const current = encoder.encode("before");
+  let remote = encoder.encode("before");
   const desired = encoder.encode("after");
   let assetReads = 0;
   let putCalls = 0;
@@ -85,7 +85,7 @@ test("a completed putFile remains successful when the optional sync marker fails
     const url = new URL(String(input), location.origin);
     if (url.pathname === "/assets/test.mm") {
       assetReads += 1;
-      return new Response(current, { status: 200 });
+      return new Response(remote, { status: 200 });
     }
     if (url.pathname === "/api/file/putFile") {
       putCalls += 1;
@@ -94,6 +94,7 @@ test("a completed putFile remains successful when the optional sync marker fails
       assert.equal(init.body.get("path"), "/data/assets/test.mm");
       assert.equal(init.body.has("modTime"), false);
       assert.ok(init.body.get("file") instanceof Blob);
+      remote = new Uint8Array(await init.body.get("file").arrayBuffer());
       return Response.json({ code: 0, msg: "", data: null });
     }
     if (url.pathname === "/api/attr/setBlockAttrs") {
@@ -108,13 +109,59 @@ test("a completed putFile remains successful when the optional sync marker fails
   store.cacheRecovery({ nodeData: { topic: "after" } });
   const saved = await store.save(desired);
 
-  assert.equal(assetReads, 2);
+  assert.equal(assetReads, 3);
   assert.equal(putCalls, 1);
   assert.equal(saved.unchanged, false);
   assert.equal(saved.syncMarked, false);
   assert.equal(store.baseHash, await contentHash(desired, null));
   assert.equal(store.conflicted, false);
   assert.equal(storage.has("recovery:test"), false);
+});
+
+test("a successful putFile response does not clear recovery until remote bytes match", async (context) => {
+  const storage = new Map();
+  const restores = [
+    replaceGlobal("location", new URL("http://127.0.0.1:6806/plugins/siyuan-cloud-document-suite/sheet-editor.html")),
+    replaceGlobal("window", { frameElement: null }),
+    replaceGlobal("localStorage", {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key)
+    })
+  ];
+  context.after(() => restores.reverse().forEach((restore) => restore()));
+
+  const before = encoder.encode("before");
+  const desired = encoder.encode("after");
+  let assetReads = 0;
+  let putCalls = 0;
+  const restoreFetch = replaceGlobal("fetch", async (input) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/assets/verify.mm") {
+      assetReads += 1;
+      return new Response(before, { status: 200 });
+    }
+    if (url.pathname === "/api/file/putFile") {
+      putCalls += 1;
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  context.after(restoreFetch);
+
+  const store = new SiyuanFileStore("/assets/verify.mm", "recovery:verify");
+  await store.loadRemote();
+  const originalHash = store.baseHash;
+  store.cacheRecovery({ revision: "local" });
+
+  await assert.rejects(
+    () => store.save(desired),
+    /写入思源后的附件校验失败/
+  );
+  assert.equal(assetReads, 3);
+  assert.equal(putCalls, 1);
+  assert.equal(store.baseHash, originalHash);
+  assert.deepEqual(store.readRecovery()?.payload, { revision: "local" });
 });
 
 test("an older in-flight save does not clear a newer recovery snapshot", async (context) => {
@@ -268,7 +315,10 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetHtml, /td\.range-selected/);
   assert.match(sheetHtml, /td\.selection-top/);
   assert.match(sheetHtml, /table\.range-multi td\.active-cell:focus\{outline:0\}/);
-  assert.match(mindHtml, /#help\{left:72px;right:182px/);
+  assert.match(mindHtml, /#help\{left:136px;right:238px/);
+  assert.match(mindHtml, /id="shortcut-dialog"[^>]*hidden/);
+  assert.match(mindHtml, /id="focus-exit"[^>]*>返回完整脑图/);
+  assert.match(mindHtml, /data-action="focus"[^>]*>聚焦分支/);
   assert.match(mindHtml, /#map \.map-container\{background:#fff!important\}/);
   assert.match(mindHtml, /me-tpc\.task-done,me-tpc\.node-underlined\{text-decoration:none!important\}/);
   assert.match(mindHtml, /me-tpc\.task-done \.text\{color:#98a2b3!important;text-decoration-line:line-through!important/);
@@ -280,7 +330,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindHtml, /id="view-style"[^>]*>层级样式/);
   assert.match(mindHtml, /body\.hierarchy-view me-tpc\[data-depth="1"\]/);
   assert.match(mindHtml, /me-tpc\.selected:not\(\[data-depth="0"\]\).*background:#fff!important.*box-shadow:0 0 0 2px #3478f6!important/);
-  assert.match(mindHtml, /#input-box\{[^}]*outline:0!important[^}]*box-shadow:0 0 0 2px #3478f6!important/);
+  assert.match(mindHtml, /#input-box\{[^}]*max-width:min\(480px[^}]*outline:0!important[^}]*box-shadow:0 0 0 2px #3478f6!important/);
   assert.match(mindScript, /CLOUD_VIEW_STYLE/);
   assert.match(mindScript, /cloudViewStyle === "hierarchy"/);
   assert.match(mindScript, /contextMenu: \{ locale: zhCnMenu, focus: true, link: false \}/);
@@ -297,19 +347,20 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindHtml, /me-epd\.minus::before\{content:""[^}]*top:1px[^}]*border-width:0 2px 2px 0[^}]*rotate\(135deg\)/);
   assert.match(mindHtml, /\.lhs me-parent>me-epd\.minus::before\{transform:rotate\(-45deg\)/);
   assert.match(mindScript, /await mind\.init\(data\);[\s\S]*mind\.generateMainBranch = generateFeishuMainBranch;[\s\S]*mind\.generateSubBranch = generateFeishuSubBranch;[\s\S]*refreshDecoratedLayout\(mind, true\)/);
-  assert.match(mindScript, /function refreshDecoratedLayout\(mind, reveal = false\)[\s\S]*const selectedNodeId = mind\.currentNode\?\.nodeObj\?\.id[\s\S]*requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]*mind\.refresh\(\);[\s\S]*mind\.findEle\(selectedNodeId\)[\s\S]*mind\.selectNode\(selectedTopic\)[\s\S]*layout-ready/);
+  assert.match(mindScript, /function refreshDecoratedLayout\(mind, reveal = false\)[\s\S]*mindRenderRequested = true[\s\S]*if \(mindRenderFrame\) return[\s\S]*requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame\(\(\) => \{[\s\S]*const selectedNodeId = mind\.currentNode\?\.nodeObj\?\.id[\s\S]*mind\.refresh\(\);[\s\S]*findMindTopic\(mind, selectedNodeId\)[\s\S]*mind\.selectNode\(selectedTopic\)[\s\S]*layout-ready/);
   assert.match(mindScript, /function redrawVisibleBranches\(\)/);
   assert.match(mindScript, /path\.setAttribute\("d", branchPathFromRects/);
   assert.match(mindScript, /redrawVisibleBranches\(\);/);
-  assert.match(mindScript, /if \(operation\?\.name === "beginEdit"\) return/);
-  assert.match(mindScript, /const scheduleMindPersistence = \(\) =>/);
+  assert.match(mindScript, /if \(operation\?\.name === "beginEdit"\) \{[\s\S]*pendingKeyboardAdd = undefined;[\s\S]*return;[\s\S]*\}/);
+  assert.match(mindScript, /scheduleMindPersistence = \(\) =>/);
   assert.match(mindScript, /for \(const historyAction of \["undo", "redo"\]\)/);
   assert.match(mindScript, /const result = nativeHistoryAction\(\.\.\.args\);[\s\S]*scheduleMindPersistence\(\);[\s\S]*refreshDecoratedLayout\(mind\)/);
   assert.match(mindScript, /roundedOrthogonalBranch/);
   assert.match(mindScript, /sameRowTolerance/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
   assert.match(mindScript, /return `M \$\{parentEdge\} \$\{lineY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm35/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm47/);
+  assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);
   assert.match(mindHtml, /me-nodes>svg\.lines\{z-index:1!important;pointer-events:none\}/);
@@ -335,13 +386,13 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /children\.style\.transform = `translateY\(\$\{correction\}px\)`/);
   assert.match(mindScript, /function redrawVisibleBranches\(\) \{\s*alignVisibleHierarchy\(\)/);
   assert.match(mindScript, /expander\.addEventListener\("pointerdown", \(\) => \{[\s\S]*pendingViewportAnchor = anchor/);
-  assert.match(mindScript, /function restoreViewportAnchor\(mind, anchor\)[\s\S]*mind\.findEle\(anchor\.nodeId\)[\s\S]*mind\.move\(dx, dy\)/);
+  assert.match(mindScript, /function restoreViewportAnchor\(mind, anchor\)[\s\S]*findMindTopic\(mind, anchor\.nodeId\)[\s\S]*mind\.move\(dx, dy\)/);
   assert.match(mindScript, /const viewportAnchor = pendingViewportAnchor;[\s\S]*redrawVisibleBranches\(\);[\s\S]*restoreViewportAnchor\(mind, viewportAnchor\)/);
   assert.match(mindHtml, /body\.layout-ready #map\{opacity:1\}/);
   assert.match(mindScript, /\^\(\?:新节点\|未命名主题\|new node\)\$/);
   assert.match(mindHtml, /stroke-linecap:round!important;stroke-linejoin:round!important/);
   assert.doesNotMatch(mindScript, /rightDragMoved|rightDragStart/);
-  assert.match(mindHtml, /左键拖节点：调整层级.*右键拖动画布：平移视图/);
+  assert.match(mindHtml, /Tab：子节点.*Enter：同级节点.*Ctrl\+\/：收起或展开.*\?：快捷键/);
   assert.doesNotMatch(packageScript, /f\.button === 2/);
   assert.match(pluginSource, /this\.buildUniqueUploadName\("新建脑图\.mm"\)/);
   assert.match(pluginSource, /asset\.originalName = "新建脑图\.mm"/);
@@ -372,12 +423,52 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetScript, /event\.key === "Delete"/);
   assert.match(sheetScript, /event\.key === "Enter"/);
   assert.match(sheetScript, /event\.key === "Tab"/);
+  assert.match(sheetScript, /event\.key === "Home" \|\| event\.key === "End"/);
+  assert.match(sheetScript, /jumpToDataEdge/);
+  assert.match(sheetScript, /正在粘贴/);
+  assert.match(sheetScript, /已粘贴 \$\{rowCount\} 行 × \$\{colCount\} 列/);
+  assert.match(sheetHtml, /id="replace-one"/);
+  assert.match(sheetHtml, /id="replace-all"/);
+  assert.match(sheetHtml, /id="find-selection"/);
+  assert.match(sheetHtml, /id="find-formulas"/);
+  assert.match(sheetHtml, /id="formula-suggestions"/);
+  assert.match(sheetHtml, /id="formula-suggestion-menu"/);
+  assert.match(sheetHtml, /id="selection-summary"/);
+  assert.match(sheetHtml, /sheet-editor\.js\?v=__PLUGIN_VERSION__-simple7/);
+  assert.match(sheetScript, /setCellsText\(XLSX, model, sheet\.name, changes\)/);
+  assert.match(sheetScript, /公式结果不会被直接替换/);
+  assert.match(sheetScript, /const FORMULA_HINTS/);
+  assert.match(sheetScript, /selectionStatistics\(XLSX, model/);
+  assert.match(sheetScript, /event\.key === "F2"/);
+  assert.match(sheetScript, /function cancelEditSession\(\)/);
+  assert.match(sheetScript, /model\.operations\.splice\(session\.operationIndex\)/);
+  assert.match(sheetScript, /const directTextInput = targetCell/);
+  assert.match(sheetScript, /event\.inputType !== "insertText" && event\.inputType !== "insertCompositionText"/);
+  assert.match(sheetScript, /function normalizedCellPosition\(row, col\)/);
+  assert.match(sheetScript, /\(event\.key === "Home" \|\| event\.key === "End"\) && !editSession\?\.editing/);
+  assert.match(sheetScript, /setFormulaSuggestionIndex/);
+  assert.match(sheetScript, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+  assert.match(sheetScript, /validateSerializedWorkbook\(XLSX, model, bytes\)/);
+  assert.match(sheetScript, /正在生成并校验 \.xlsx/);
+  assert.match(sheetScript, /if \(lastSaveError\)/);
+  assert.match(sheetScript, /无法结束编辑/);
+  assert.match(sheetHtml, /@media\(max-width:760px\)/);
   assert.match(sheetScript, /const HISTORY_LIMIT = 100/);
   assert.match(sheetScript, /grid\.classList\.add\("range-multi"\)/);
   assert.match(sheetScript, /cellInputText\(XLSX, model/);
   assert.match(sheetScript, /if \(!session\.dirty\) return/);
   assert.match(sheetScript, /restoreCellRange\(XLSX, model/);
   assert.match(sheetScript, /event\.key\.toLowerCase\(\) === "f"/);
+  assert.match(sheetHtml, /id="structure-context-menu"/);
+  assert.match(sheetHtml, /id="operation-toast"/);
+  assert.match(sheetScript, /addEventListener\("contextmenu"/);
+  assert.match(sheetScript, /headerDrag\?\.axis === "row"/);
+  assert.match(sheetScript, /headerDrag\?\.axis === "col"/);
+  assert.match(sheetScript, /const structureShortcut = modifier/);
+  assert.match(sheetScript, /if \(structureBusy\) return/);
+  assert.match(sheetScript, /正在\$\{verb\} \$\{count\} \$\{noun\}/);
+  assert.match(sheetScript, /确定删除选中的 \$\{count\} \$\{noun\}/);
+  assert.match(sheetScript, /focusCurrentSelection\(\)/);
   assert.doesNotMatch(mindScript, /querySelector\("#save"\)/);
   assert.doesNotMatch(mindScript, /createElement\("button"\);\s*checkbox\.type/);
   assert.match(mindScript, /const taskDone = topic\.classList\.contains\("task-done"\)/);
@@ -390,13 +481,31 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /button\.setAttribute\("aria-pressed", String\(taskDone\)\)/);
   assert.match(mindScript, /nodeTools\.addEventListener\("click", async \(event\) => \{\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\)/);
   assert.match(mindScript, /data-action="underline"[^\n]+includes\("underline"\)/);
+  assert.match(mindHtml, /id="workspace-search"[^>]*placeholder="查找节点（Ctrl\+F）"/);
+  assert.match(mindHtml, /id="outline-list" role="tree"/);
+  assert.match(mindScript, /buildOutlineRows/);
+  assert.match(mindScript, /nextSearchResultId/);
+  assert.match(mindScript, /function editKeyboardNode\(mind, node\)[\s\S]*findMindTopic\(mind, node\.id\)[\s\S]*mind\.selectNode\(newTopic\);[\s\S]*mind\.editTopic\(newTopic\)/);
+  assert.match(mindScript, /function addKeyboardChild\(mind, event\)[\s\S]*mind\.addChild\(target, node\);[\s\S]*editKeyboardNode\(mind, node\)/);
+  assert.match(mindScript, /function addKeyboardRelative\(mind, event\)[\s\S]*mind\.insertParent\(target, node\)[\s\S]*mind\.insertSibling\(event\.shiftKey \? "before" : "after", target, node\)[\s\S]*editKeyboardNode\(mind, node\)/);
+  assert.match(mindScript, /const visibleRoot = target\.nodeObj === mind\.nodeData/);
+  assert.doesNotMatch(mindScript, /visibleRoot = !target\.nodeObj\.parent/);
+  assert.match(mindScript, /const keyboardCreateKey = key === "tab" \|\| event\.code === "Tab" \|\| event\.keyCode === 9[\s\S]*\["Enter", "NumpadEnter"\]\.includes\(event\.code\)[\s\S]*event\.keyCode === 13/);
+  assert.match(mindScript, /document\.activeElement === mind\.container[\s\S]*keyboardCreateKey[\s\S]*addKeyboardChild\(mind, event\)[\s\S]*addKeyboardRelative\(mind, event\)/);
+  assert.match(mindScript, /input\.dataset\.keyboardNodeId = node\.id[\s\S]*input\.dataset\.keyboardInitialTopic = node\.topic[\s\S]*input\.dataset\.keyboardDirty = "false"/);
+  assert.match(mindScript, /target\.id === "input-box"[\s\S]*target\.dataset\.keyboardNodeId[\s\S]*target\.dataset\.keyboardDirty !== "true"[\s\S]*target\.blur\(\);[\s\S]*mind\.undo\(\)/);
+  assert.match(mindScript, /const keyboardAddInProgress = \["addChild", "insertSibling", "insertParent"\]\.includes\(operation\?\.name\)[\s\S]*if \(keyboardAddInProgress\) \{[\s\S]*decorateNodes\(mind\);[\s\S]*return;/);
+  assert.match(mindScript, /\["z", "y"\]\.includes\(key\)/);
+  assert.match(mindScript, /if \(key === "y" \|\| \(key === "z" && event\.shiftKey\)\) mind\.redo\(\);[\s\S]*else mind\.undo\(\)/);
+  assert.match(pluginSource, /\$\{CLOUD_DOCUMENT_IFRAME\}\) \.protyle-action__drag/);
+  assert.match(packageScript, /copyFile\("static\/mm-workspace\.js", "dist\/mm-workspace\.js"\)/);
   assert.match(sheetScript, /wrapper\.scrollTop = 0/);
   assert.match(sheetScript, /\.\/siyuan-file-store\.js\?v=__PLUGIN_VERSION__/);
   assert.match(sheetScript, /\.\/sheet-workbook\.js\?v=__PLUGIN_VERSION__/);
   assert.match(sheetScript, /setTimeout\(\(\) => void persist\(false\), 700\)/);
   assert.match(mindScript, /setTimeout\(\(\) => void persistMind\(false\), 700\)/);
   assert.match(pluginSource, /refreshCloudDocumentEmbeds/);
-  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm35`/);
+  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm47`/);
   assert.match(pluginSource, /searchParams\.set\("v", editorVersion\)/);
   assert.match(pluginSource, /fitCloudDocumentEmbeds/);
   assert.match(pluginSource, /mutationsAffectCloudDocument\(records\)/);

@@ -1,5 +1,15 @@
 import MindElixir from "./MindElixir.js?v=right-pan-1";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
+import {
+  buildOutlineRows,
+  captureMindExpansion,
+  expandNodeAncestors,
+  flattenMindNodes,
+  nextSearchResultId,
+  resolveMindShortcut,
+  restoreMindExpansion,
+  searchMindNodes
+} from "./mm-workspace.js";
 
 const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
@@ -7,6 +17,17 @@ const status = document.querySelector("#status");
 const exportButton = document.querySelector("#export");
 const viewStyleButton = document.querySelector("#view-style");
 const nodeTools = document.querySelector("#node-tools");
+const searchToggle = document.querySelector("#search-toggle");
+const shortcutToggle = document.querySelector("#shortcut-toggle");
+const shortcutDialog = document.querySelector("#shortcut-dialog");
+const shortcutClose = document.querySelector("#shortcut-close");
+const focusExit = document.querySelector("#focus-exit");
+const outlineToggle = document.querySelector("#outline-toggle");
+const workspacePanel = document.querySelector("#workspace-panel");
+const workspaceSearch = document.querySelector("#workspace-search");
+const workspaceClose = document.querySelector("#workspace-close");
+const searchCount = document.querySelector("#search-count");
+const outlineList = document.querySelector("#outline-list");
 const storageKey = `siyuan-mm-editor:${asset}`;
 const store = new SiyuanFileStore(asset, storageKey);
 let saveTimer;
@@ -16,6 +37,21 @@ let nativeAddChild;
 let sourceDocument;
 let pendingViewportAnchor;
 let viewportAnchorTimer;
+let mindRenderFrame;
+let mindRenderRequested = false;
+let mindRenderReveal = false;
+let passiveDecorationFrame;
+let workspaceRenderFrame;
+let workspaceSelectionFrame;
+let workspaceRevealActive = false;
+let workspaceSelectionReveal = false;
+let lastSearchResultId;
+let lastSearchQuery = "";
+let searchExpansionSnapshot;
+const searchManualExpansionChanges = new Set();
+let focusViewportState;
+let scheduleMindPersistence = () => {};
+let pendingKeyboardAdd;
 
 const zhCnMenu = {
   addChild: "添加子节点",
@@ -34,6 +70,15 @@ const zhCnMenu = {
 
 function setStatus(text) {
   status.textContent = text;
+}
+
+function findMindTopic(mind, nodeId) {
+  if (!nodeId) return undefined;
+  try {
+    return mind.findEle(nodeId);
+  } catch {
+    return undefined;
+  }
 }
 
 function createRandomId() {
@@ -256,6 +301,11 @@ function normalizeMindDirections(data) {
 function updateToolbar(mind) {
   const topic = mind.currentNode;
   const node = topic?.nodeObj;
+  const focused = Boolean(mind.isFocusMode);
+  document.body.classList.toggle("focus-mode", focused);
+  focusExit.textContent = focused && mind.nodeData?.topic
+    ? `返回完整脑图 · ${mind.nodeData.topic}`
+    : "返回完整脑图";
   nodeTools.style.display = node ? "flex" : "none";
   if (!node) return;
   nodeTools.querySelector('[data-action="bold"]').classList.toggle("active", node.style?.fontWeight === "700" || node.style?.fontWeight === "bold");
@@ -265,6 +315,115 @@ function updateToolbar(mind) {
   const taskDone = topic.classList.contains("task-done");
   taskButton.classList.toggle("active", taskDone);
   taskButton.setAttribute("aria-pressed", String(taskDone));
+  const focusButton = nodeTools.querySelector('[data-action="focus"]');
+  focusButton.textContent = focused ? "退出聚焦" : "聚焦分支";
+  focusButton.title = focused ? "返回完整脑图" : "仅显示当前分支";
+  focusButton.classList.toggle("active", focused);
+  focusButton.disabled = !focused && !node.parent;
+}
+
+function isTextEditingTarget(target) {
+  return target instanceof HTMLElement && (
+    target.id === "input-box" ||
+    target.matches("input,textarea,[contenteditable='true'],[contenteditable='plaintext-only']")
+  );
+}
+
+function setShortcutDialogOpen(open) {
+  shortcutDialog.hidden = !open;
+  shortcutToggle.classList.toggle("active", open);
+  shortcutToggle.setAttribute("aria-expanded", String(open));
+  if (open) shortcutClose.focus();
+}
+
+function resizeMindInputBox(input) {
+  if (!(input instanceof HTMLElement) || input.id !== "input-box") return;
+  const available = Math.max(120, Math.min(480, innerWidth - 48));
+  const originalMin = Number.parseFloat(input.dataset.cloudMinWidth || input.style.minWidth) || 72;
+  input.dataset.cloudMinWidth = String(originalMin);
+  input.style.width = "auto";
+  input.style.width = `${Math.min(available, Math.max(originalMin, input.scrollWidth + 4))}px`;
+  input.style.height = "auto";
+  input.style.height = `${Math.max(34, input.scrollHeight)}px`;
+}
+
+function selectAndCenterMindNode(mind, nodeId) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const topic = findMindTopic(mind, nodeId);
+    if (!topic) return;
+    mind.selectNode(topic);
+    decorateNodes(mind);
+    centerTopicInWorkspace(mind, topic);
+    queueWorkspaceRender(mind, true);
+  }));
+}
+
+function restoreFocusViewport(mind, nodeId, viewport) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const topic = findMindTopic(mind, nodeId);
+    if (topic) mind.selectNode(topic);
+    decorateNodes(mind);
+    if (viewport?.transform) {
+      mind.scaleVal = viewport.scaleVal;
+      mind.map.style.transform = viewport.transform;
+    }
+    queueWorkspaceSelectionSync(mind, true);
+  }));
+}
+
+function toggleBranchFocus(mind) {
+  if (mind.isFocusMode) {
+    const focusedNodeId = mind.nodeData?.id;
+    const viewport = focusViewportState;
+    focusViewportState = undefined;
+    mind.cancelFocus();
+    if (focusedNodeId) restoreFocusViewport(mind, focusedNodeId, viewport);
+    setStatus("已返回完整脑图");
+    return;
+  }
+  const topic = mind.currentNode;
+  if (!topic?.nodeObj?.parent) {
+    setStatus("中心主题已经是完整脑图");
+    return;
+  }
+  const nodeId = topic.nodeObj.id;
+  focusViewportState = {
+    transform: mind.map.style.transform,
+    scaleVal: mind.scaleVal
+  };
+  mind.focusNode(topic);
+  selectAndCenterMindNode(mind, nodeId);
+  setStatus("已聚焦当前分支 · 可从底部工具栏退出");
+}
+
+function toggleSelectedBranch(mind) {
+  const topic = mind.currentNode;
+  const node = topic?.nodeObj;
+  if (!node?.children?.length) {
+    setStatus("当前节点没有可收起的子节点");
+    return;
+  }
+  const rect = topic.getBoundingClientRect();
+  pendingViewportAnchor = {
+    nodeId: node.id,
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2
+  };
+  node.expanded = node.expanded === false;
+  mind.bus.fire("operation", {
+    name: "toggleExpand",
+    obj: { id: node.id, expanded: node.expanded }
+  });
+  setStatus(node.expanded ? "已展开当前分支" : "已收起当前分支");
+}
+
+function focusRootTopic(mind) {
+  if (mind.isFocusMode) mind.cancelFocus();
+  focusViewportState = undefined;
+  const rootId = mind.nodeData?.id;
+  if (!rootId) return;
+  selectAndCenterMindNode(mind, rootId);
+  setStatus("已回到中心主题");
 }
 
 function isHierarchyView(mind) {
@@ -360,6 +519,7 @@ function decorateNodes(mind) {
   }
   updateViewStyle(mind);
   updateToolbar(mind);
+  resizeMindInputBox(document.querySelector("#input-box"));
 }
 
 function pathCoordinates(svg, startRect, endRect, left) {
@@ -476,7 +636,7 @@ function redrawVisibleBranches() {
 
 function restoreViewportAnchor(mind, anchor) {
   if (!anchor) return;
-  const topic = mind.findEle(anchor.nodeId);
+  const topic = findMindTopic(mind, anchor.nodeId);
   if (!topic) return;
   const rect = topic.getBoundingClientRect();
   const dx = anchor.x - (rect.left + rect.width / 2);
@@ -485,22 +645,224 @@ function restoreViewportAnchor(mind, anchor) {
 }
 
 function refreshDecoratedLayout(mind, reveal = false) {
-  const selectedNodeId = mind.currentNode?.nodeObj?.id;
-  const viewportAnchor = pendingViewportAnchor;
-  pendingViewportAnchor = undefined;
-  clearTimeout(viewportAnchorTimer);
-  decorateNodes(mind);
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    mind.refresh();
-    if (selectedNodeId) {
-      const selectedTopic = mind.findEle(selectedNodeId);
-      if (selectedTopic) mind.selectNode(selectedTopic);
-    }
+  mindRenderRequested = true;
+  mindRenderReveal ||= reveal;
+  if (mindRenderFrame) return;
+  const flush = () => {
+    mindRenderFrame = requestAnimationFrame(() => {
+      mindRenderFrame = requestAnimationFrame(() => {
+        mindRenderFrame = undefined;
+        if (!mindRenderRequested) return;
+        mindRenderRequested = false;
+        const selectedNodeId = mind.currentNode?.nodeObj?.id;
+        const viewportAnchor = pendingViewportAnchor;
+        const shouldReveal = mindRenderReveal;
+        pendingViewportAnchor = undefined;
+        mindRenderReveal = false;
+        clearTimeout(viewportAnchorTimer);
+        mind.refresh();
+        if (selectedNodeId) {
+          const selectedTopic = findMindTopic(mind, selectedNodeId);
+          if (selectedTopic) mind.selectNode(selectedTopic);
+        }
+        decorateNodes(mind);
+        redrawVisibleBranches();
+        restoreViewportAnchor(mind, viewportAnchor);
+        if (shouldReveal) document.body.classList.add("layout-ready");
+        if (mindRenderRequested) flush();
+      });
+    });
+  };
+  flush();
+}
+
+function queuePassiveDecorations(mind) {
+  if (passiveDecorationFrame || document.querySelector("#input-box")) return;
+  passiveDecorationFrame = requestAnimationFrame(() => {
+    passiveDecorationFrame = undefined;
     decorateNodes(mind);
-    redrawVisibleBranches();
-    restoreViewportAnchor(mind, viewportAnchor);
-    if (reveal) document.body.classList.add("layout-ready");
+    queueWorkspaceRender(mind);
+  });
+}
+
+function beginSearchExpansionSession(mind) {
+  if (!searchExpansionSnapshot) {
+    searchExpansionSnapshot = captureMindExpansion(mind.nodeData);
+    searchManualExpansionChanges.clear();
+  }
+}
+
+function endSearchExpansionSession(mind) {
+  if (!searchExpansionSnapshot) return false;
+  const changed = restoreMindExpansion(
+    mind.nodeData,
+    searchExpansionSnapshot,
+    searchManualExpansionChanges
+  );
+  searchExpansionSnapshot = undefined;
+  searchManualExpansionChanges.clear();
+  if (changed) refreshDecoratedLayout(mind);
+  return changed > 0;
+}
+
+function setWorkspaceOpen(mind, open, focusSearch = false) {
+  if (!open) endSearchExpansionSession(mind);
+  document.body.classList.toggle("workspace-open", open);
+  searchToggle.setAttribute("aria-expanded", String(open));
+  outlineToggle.setAttribute("aria-expanded", String(open));
+  outlineToggle.classList.toggle("active", open);
+  searchToggle.classList.toggle("active", open && (focusSearch || Boolean(workspaceSearch.value)));
+  if (open && focusSearch) requestAnimationFrame(() => {
+    workspaceSearch.focus();
+    workspaceSearch.select();
+  });
+}
+
+function centerTopicInWorkspace(mind, topic) {
+  const mapRect = document.querySelector("#map").getBoundingClientRect();
+  const topicRect = topic.getBoundingClientRect();
+  const panelWidth = document.body.classList.contains("workspace-open") && innerWidth > 760
+    ? workspacePanel.getBoundingClientRect().width + 24
+    : 0;
+  const targetX = mapRect.left + Math.max(0, mapRect.width - panelWidth) / 2;
+  const targetY = mapRect.top + mapRect.height / 2;
+  const topicX = topicRect.left + topicRect.width / 2;
+  const topicY = topicRect.top + topicRect.height / 2;
+  mind.move(targetX - topicX, targetY - topicY);
+}
+
+function focusMindNode(mind, nodeId) {
+  const searching = Boolean(workspaceSearch.value.trim());
+  if (searching) beginSearchExpansionSession(mind);
+  const revealed = expandNodeAncestors(mind.nodeData, nodeId);
+  if (revealed) {
+    mind.refresh();
+    if (!searching) scheduleMindPersistence();
+  }
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const topic = findMindTopic(mind, nodeId);
+    if (!topic) return;
+    mind.selectNode(topic);
+    decorateNodes(mind);
+    centerTopicInWorkspace(mind, topic);
+    queueWorkspaceRender(mind, true);
   }));
+}
+
+function renderWorkspace(mind, revealActive = false) {
+  const query = workspaceSearch.value.trim();
+  const results = searchMindNodes(mind.nodeData, query);
+  const rows = buildOutlineRows(mind.nodeData, query);
+  const selectedId = mind.currentNode?.nodeObj?.id;
+  searchCount.textContent = query
+    ? `${results.length} 个匹配`
+    : `${flattenMindNodes(mind.nodeData).length} 个节点`;
+  searchToggle.classList.toggle("active", document.body.classList.contains("workspace-open") && Boolean(query));
+  outlineList.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "outline-empty";
+    empty.textContent = query ? "没有匹配节点" : "脑图中没有节点";
+    outlineList.appendChild(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const row of rows) {
+    const container = document.createElement("div");
+    container.className = "outline-row";
+    container.style.setProperty("--depth", String(Math.max(0, row.depth)));
+    container.dataset.nodeId = row.id;
+    container.setAttribute("role", "treeitem");
+    container.setAttribute("aria-level", String(row.depth + 1));
+    container.setAttribute("aria-selected", String(row.id === selectedId));
+    if (row.hasChildren) container.setAttribute("aria-expanded", String(row.expanded));
+    container.classList.toggle("matched", Boolean(row.matched));
+    container.classList.toggle("active", row.id === selectedId);
+
+    const expander = document.createElement("button");
+    expander.type = "button";
+    expander.className = `outline-expander${row.hasChildren ? "" : " placeholder"}`;
+    expander.tabIndex = row.hasChildren ? 0 : -1;
+    expander.setAttribute("aria-label", row.expanded ? "收起子节点" : "展开子节点");
+    expander.textContent = row.expanded ? "⌄" : "›";
+    if (row.hasChildren) expander.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (searchExpansionSnapshot) searchManualExpansionChanges.add(row.id);
+      row.node.expanded = !row.expanded;
+      mind.refresh();
+      scheduleMindPersistence();
+      refreshDecoratedLayout(mind);
+      queueWorkspaceRender(mind);
+    });
+
+    const topicButton = document.createElement("button");
+    topicButton.type = "button";
+    topicButton.className = "outline-topic";
+    topicButton.textContent = row.topic;
+    topicButton.title = row.topic;
+    topicButton.addEventListener("click", () => {
+      if (row.matched) lastSearchResultId = row.id;
+      focusMindNode(mind, row.id);
+    });
+    container.append(expander, topicButton);
+    fragment.appendChild(container);
+  }
+  outlineList.appendChild(fragment);
+  if (revealActive && selectedId) {
+    const activeRow = Array.from(outlineList.querySelectorAll(".outline-row"))
+      .find((row) => row.dataset.nodeId === selectedId);
+    activeRow?.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function queueWorkspaceRender(mind, revealActive = false) {
+  workspaceRevealActive ||= revealActive;
+  if (workspaceRenderFrame) return;
+  workspaceRenderFrame = requestAnimationFrame(() => {
+    workspaceRenderFrame = undefined;
+    const shouldReveal = workspaceRevealActive;
+    workspaceRevealActive = false;
+    renderWorkspace(mind, shouldReveal);
+  });
+}
+
+function syncWorkspaceSelection(mind, revealActive = false) {
+  const selectedId = mind.currentNode?.nodeObj?.id;
+  let activeRow;
+  for (const row of outlineList.querySelectorAll(".outline-row")) {
+    const active = row.dataset.nodeId === selectedId;
+    row.classList.toggle("active", active);
+    row.setAttribute("aria-selected", String(active));
+    if (active) activeRow = row;
+  }
+  if (revealActive) activeRow?.scrollIntoView({ block: "nearest" });
+}
+
+function queueWorkspaceSelectionSync(mind, revealActive = false) {
+  workspaceSelectionReveal ||= revealActive;
+  if (workspaceSelectionFrame) return;
+  workspaceSelectionFrame = requestAnimationFrame(() => {
+    workspaceSelectionFrame = undefined;
+    const shouldReveal = workspaceSelectionReveal;
+    workspaceSelectionReveal = false;
+    syncWorkspaceSelection(mind, shouldReveal);
+  });
+}
+
+function goToSearchResult(mind, step) {
+  const query = workspaceSearch.value.trim();
+  if (!query) return;
+  beginSearchExpansionSession(mind);
+  const results = searchMindNodes(mind.nodeData, query);
+  const nodeId = nextSearchResultId(results, lastSearchResultId, step);
+  if (!nodeId) {
+    setStatus("没有匹配的脑图节点");
+    return;
+  }
+  lastSearchResultId = nodeId;
+  focusMindNode(mind, nodeId);
+  const index = results.findIndex((row) => row.id === nodeId);
+  setStatus(`查找结果 ${index + 1}/${results.length}`);
 }
 
 async function applyToolbarAction(mind, button) {
@@ -509,6 +871,10 @@ async function applyToolbarAction(mind, button) {
   const node = topic.nodeObj;
   const style = { ...(node.style || {}) };
   const action = button.dataset.action;
+  if (action === "focus") {
+    toggleBranchFocus(mind);
+    return;
+  }
   let taskDone;
   if (action === "bold") style.fontWeight = style.fontWeight === "700" ? "" : "700";
   if (action === "italic") style.fontStyle = style.fontStyle === "italic" ? "" : "italic";
@@ -614,6 +980,62 @@ async function loadInitialData() {
   return { value: recovery.payload, state: "conflict" };
 }
 
+function trackKeyboardNode(node) {
+  pendingKeyboardAdd = {
+    nodeId: node.id,
+    initialTopic: node.topic,
+    dirty: false
+  };
+}
+
+function editKeyboardNode(mind, node) {
+  requestAnimationFrame(() => {
+    const newTopic = findMindTopic(mind, node.id);
+    if (!newTopic) {
+      if (pendingKeyboardAdd?.nodeId === node.id) pendingKeyboardAdd = undefined;
+      return;
+    }
+    mind.selectNode(newTopic);
+    mind.editTopic(newTopic);
+    const input = document.querySelector("#input-box");
+    if (input) {
+      input.dataset.keyboardNodeId = node.id;
+      input.dataset.keyboardInitialTopic = node.topic;
+      input.dataset.keyboardDirty = "false";
+      input.focus();
+    }
+    updateToolbar(mind);
+    queueWorkspaceRender(mind, true);
+  });
+}
+
+function addKeyboardChild(mind, event) {
+  const target = mind.currentNode;
+  if (!target) return;
+  const node = mind.generateNewObj();
+  if (event.shiftKey && !mind.isFocusMode && target.nodeObj === mind.nodeData) node.direction = 0;
+  trackKeyboardNode(node);
+  mind.addChild(target, node);
+  editKeyboardNode(mind, node);
+}
+
+function addKeyboardRelative(mind, event) {
+  const target = mind.currentNode;
+  if (!target) return;
+  const visibleRoot = target.nodeObj === mind.nodeData;
+  if (visibleRoot) {
+    setStatus(mind.isFocusMode
+      ? "聚焦根节点不能添加同级或父节点，请先返回完整脑图"
+      : "中心主题不能添加同级或父节点");
+    return;
+  }
+  const node = mind.generateNewObj();
+  trackKeyboardNode(node);
+  if (event.ctrlKey || event.metaKey) mind.insertParent(target, node);
+  else mind.insertSibling(event.shiftKey ? "before" : "after", target, node);
+  editKeyboardNode(mind, node);
+}
+
 try {
   const { value: data, state: initialState } = await loadInitialData();
   delete data.arrows;
@@ -628,22 +1050,20 @@ try {
     toolBar: true,
     generateMainBranch: generateFeishuMainBranch,
     generateSubBranch: generateFeishuSubBranch,
-    keypress: {
-      Tab: (event) => {
-        const target = mind.currentNode;
-        if (event.shiftKey && target && !target.nodeObj.parent) {
-          const node = mind.generateNewObj();
-          node.direction = 0;
-          mind.addChild(target, node);
-        } else {
-          mind.addChild();
-        }
-      }
-    },
+    keypress: true,
     allowUndo: true,
     compact: false
   });
   await mind.init(data);
+  const nativeGetData = mind.getData.bind(mind);
+  mind.getData = () => {
+    const snapshot = nativeGetData();
+    if (mind.isFocusMode && mind.tempDirection !== null) snapshot.direction = mind.tempDirection;
+    if (searchExpansionSnapshot) {
+      restoreMindExpansion(snapshot.nodeData, searchExpansionSnapshot, searchManualExpansionChanges);
+    }
+    return snapshot;
+  };
   // MindElixir reapplies the theme during init, which restores its curved
   // branch generators. Bind the Feishu-style paths after initialization.
   mind.generateMainBranch = generateFeishuMainBranch;
@@ -693,9 +1113,16 @@ try {
   nativeAddChild = mind.addChild.bind(mind);
   mind.addChild = (element, node) => {
     const target = element || mind.currentNode;
-    if (target && !target.nodeObj.parent) {
+    const visibleRoot = target?.nodeObj === mind.nodeData;
+    if (visibleRoot) {
+      // A focused branch root keeps its original parent reference. MindElixir
+      // otherwise treats it as a regular child and may try to expand a root
+      // control that does not exist in the focused DOM.
+      if (target.nodeObj.expanded === false) target.nodeObj.expanded = true;
       node ||= mind.generateNewObj();
-      node.direction = mind.direction === 0 ? 0 : 1;
+      if (node.direction !== 0 && node.direction !== 1) {
+        node.direction = mind.direction === 0 ? 0 : 1;
+      }
       const layoutDirection = mind.direction;
       mind.direction = node.direction;
       try {
@@ -712,7 +1139,7 @@ try {
   };
   requestAnimationFrame(() => requestAnimationFrame(fitMap));
   setTimeout(fitMap, 300);
-  const scheduleMindPersistence = () => {
+  scheduleMindPersistence = () => {
     clearTimeout(saveTimer);
     try {
       store.cacheRecovery(mind.getData());
@@ -727,19 +1154,51 @@ try {
     const nativeHistoryAction = mind[historyAction]?.bind(mind);
     if (!nativeHistoryAction) continue;
     mind[historyAction] = (...args) => {
+      const focusedNodeId = mind.isFocusMode ? mind.nodeData?.id : undefined;
+      if (focusedNodeId) mind.cancelFocus();
       const result = nativeHistoryAction(...args);
+      if (focusedNodeId) {
+        const focusedTopic = findMindTopic(mind, focusedNodeId);
+        if (focusedTopic) {
+          mind.focusNode(focusedTopic);
+          selectAndCenterMindNode(mind, focusedNodeId);
+        }
+      }
       scheduleMindPersistence();
       refreshDecoratedLayout(mind);
       return result;
     };
   }
   mind.bus.addListener("operation", (operation) => {
-    if (operation?.name === "beginEdit") return;
+    if (operation?.name === "beginEdit") {
+      if (operation?.obj?.id !== pendingKeyboardAdd?.nodeId) pendingKeyboardAdd = undefined;
+      return;
+    }
+    if (operation?.name === "toggleExpand" && searchExpansionSnapshot && operation?.obj?.id) {
+      searchManualExpansionChanges.add(operation.obj.id);
+    }
+    const keyboardAddInProgress = ["addChild", "insertSibling", "insertParent"].includes(operation?.name) &&
+      operation?.obj?.id === pendingKeyboardAdd?.nodeId;
+    if (operation?.name === "finishEdit" && operation?.obj?.id === pendingKeyboardAdd?.nodeId) {
+      pendingKeyboardAdd = undefined;
+    }
     scheduleMindPersistence();
+    if (keyboardAddInProgress) {
+      decorateNodes(mind);
+      queueWorkspaceRender(mind, true);
+      return;
+    }
     refreshDecoratedLayout(mind);
+    queueWorkspaceRender(mind);
   });
-  mind.bus.addListener("selectNodes", () => updateToolbar(mind));
-  mind.bus.addListener("unselectNodes", () => updateToolbar(mind));
+  mind.bus.addListener("selectNodes", () => {
+    updateToolbar(mind);
+    queueWorkspaceSelectionSync(mind, true);
+  });
+  mind.bus.addListener("unselectNodes", () => {
+    updateToolbar(mind);
+    queueWorkspaceSelectionSync(mind);
+  });
   nodeTools.addEventListener("pointerdown", (event) => event.stopPropagation());
   nodeTools.addEventListener("click", async (event) => {
     event.preventDefault();
@@ -756,9 +1215,160 @@ try {
     await mind.reshapeNode(rootTopic, { metadata });
     updateViewStyle(mind, true);
   });
-  const observer = new MutationObserver(() => decorateNodes(mind));
+  searchToggle.addEventListener("click", () => {
+    setWorkspaceOpen(mind, true, true);
+    queueWorkspaceRender(mind);
+  });
+  shortcutToggle.addEventListener("click", () => {
+    setShortcutDialogOpen(shortcutDialog.hidden);
+  });
+  shortcutClose.addEventListener("click", () => {
+    setShortcutDialogOpen(false);
+    mind.currentNode?.focus?.();
+  });
+  focusExit.addEventListener("click", () => toggleBranchFocus(mind));
+  outlineToggle.addEventListener("click", () => {
+    const open = !document.body.classList.contains("workspace-open");
+    setWorkspaceOpen(mind, open);
+    if (open) queueWorkspaceRender(mind, true);
+  });
+  workspaceClose.addEventListener("click", () => setWorkspaceOpen(mind, false));
+  workspaceSearch.addEventListener("input", () => {
+    const query = workspaceSearch.value.trim();
+    if (query && !lastSearchQuery) beginSearchExpansionSession(mind);
+    if (!query && lastSearchQuery) endSearchExpansionSession(mind);
+    if (query !== lastSearchQuery) {
+      lastSearchQuery = query;
+      lastSearchResultId = undefined;
+    }
+    queueWorkspaceRender(mind);
+  });
+  workspaceSearch.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      goToSearchResult(mind, event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setWorkspaceOpen(mind, false);
+      mind.currentNode?.focus?.();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    const key = event.key.toLowerCase();
+    const keyboardCreateKey = key === "tab" || event.code === "Tab" || event.keyCode === 9
+      ? "tab"
+      : ["enter", "return"].includes(key) ||
+          ["Enter", "NumpadEnter"].includes(event.code) ||
+          event.keyCode === 13
+        ? "enter"
+        : undefined;
+    const editingText = isTextEditingTarget(event.target);
+    const shortcutAction = resolveMindShortcut(event, {
+      editing: editingText,
+      helpOpen: !shortcutDialog.hidden,
+      workspaceOpen: document.body.classList.contains("workspace-open"),
+      focusMode: Boolean(mind.isFocusMode),
+      hasSelection: Boolean(mind.currentNode),
+      hasChildren: Boolean(mind.currentNode?.nodeObj?.children?.length)
+    });
+    if (shortcutAction) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (shortcutAction === "toggle-help") setShortcutDialogOpen(shortcutDialog.hidden);
+      else if (shortcutAction === "close-help") {
+        setShortcutDialogOpen(false);
+        mind.currentNode?.focus?.();
+      } else if (shortcutAction === "close-workspace") {
+        setWorkspaceOpen(mind, false);
+        mind.currentNode?.focus?.();
+      } else if (shortcutAction === "exit-focus") {
+        toggleBranchFocus(mind);
+      } else if (shortcutAction === "toggle-branch") toggleSelectedBranch(mind);
+      else if (shortcutAction === "focus-root") focusRootTopic(mind);
+      return;
+    }
+    if (
+      !editingText &&
+      document.activeElement === mind.container &&
+      mind.currentNode &&
+      keyboardCreateKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (keyboardCreateKey === "tab") addKeyboardChild(mind, event);
+      else addKeyboardRelative(mind, event);
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key === "f") {
+      event.preventDefault();
+      event.stopPropagation();
+      setWorkspaceOpen(mind, true, true);
+      queueWorkspaceRender(mind);
+      return;
+    }
+    if (event.key === "F3" && workspaceSearch.value.trim()) {
+      event.preventDefault();
+      event.stopPropagation();
+      setWorkspaceOpen(mind, true);
+      goToSearchResult(mind, event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || !["z", "y"].includes(key)) return;
+    const target = event.target;
+    if (
+      key === "z" &&
+      !event.shiftKey &&
+      target instanceof HTMLElement &&
+      target.id === "input-box" &&
+      target.dataset.keyboardNodeId &&
+      target.dataset.keyboardDirty !== "true"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      target.textContent = target.dataset.keyboardInitialTopic || "输入文字";
+      target.blur();
+      pendingKeyboardAdd = undefined;
+      mind.undo();
+      return;
+    }
+    if (editingText) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (key === "y" || (key === "z" && event.shiftKey)) mind.redo();
+    else mind.undo();
+  }, true);
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || target.id !== "input-box") return;
+    resizeMindInputBox(target);
+    if (target.dataset.keyboardNodeId) {
+      target.dataset.keyboardDirty = String(
+        (target.innerText?.trim() || "") !== (target.dataset.keyboardInitialTopic || "")
+      );
+    }
+    if (pendingKeyboardAdd) {
+      pendingKeyboardAdd.dirty = (target.innerText?.trim() || "") !== pendingKeyboardAdd.initialTopic;
+    }
+  }, true);
+  document.addEventListener("compositionend", (event) => {
+    resizeMindInputBox(event.target);
+  }, true);
+  const observer = new MutationObserver((records) => {
+    const onlyInputMutations = records.every((record) => {
+      const target = record.target instanceof HTMLElement
+        ? record.target
+        : record.target.parentElement;
+      return target?.closest?.("#input-box");
+    });
+    if (onlyInputMutations) {
+      resizeMindInputBox(document.querySelector("#input-box"));
+      return;
+    }
+    queuePassiveDecorations(mind);
+  });
   observer.observe(document.querySelector("#map"), { childList: true, subtree: true });
   decorateNodes(mind);
+  renderWorkspace(mind);
   async function persistMind(force) {
     if (saveInFlight) {
       saveAgain = true;

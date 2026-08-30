@@ -112,6 +112,42 @@ function formulaFromInput(value) {
   return null;
 }
 
+function valueFromInput(value, existing) {
+  const source = String(value ?? "");
+  const clearsAutomaticFormat = /(?:yyyy|yy|mm|dd|¥|￥)/i.test(String(existing?.z || ""));
+  if (source.startsWith("'")) return { t: "s", v: source.slice(1), clearFormat: clearsAutomaticFormat };
+  const trimmed = source.trim();
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateMatch) {
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+      return { t: "d", v: date, z: "yyyy-mm-dd" };
+    }
+  }
+  const currencyMatch = /^[¥￥]\s*([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)$/.exec(trimmed);
+  if (currencyMatch) {
+    const numeric = Number(currencyMatch[1].replaceAll(",", ""));
+    if (Number.isFinite(numeric)) return { t: "n", v: numeric, z: "[$¥-804]#,##0.00" };
+  }
+  if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)%$/.test(trimmed)) {
+    const decimalPlaces = (trimmed.match(/\.(\d+)/)?.[1]?.length || 0);
+    return {
+      t: "n",
+      v: Number(trimmed.slice(0, -1)) / 100,
+      z: existing?.z || (decimalPlaces ? `0.${"0".repeat(decimalPlaces)}%` : "0%")
+    };
+  }
+  if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
+    const unsigned = trimmed.replace(/^[+-]/, "");
+    const looksLikeIdentifier = /^0\d+/.test(unsigned) && !/^0(?:\.\d+)?(?:[eE][+-]?\d+)?$/i.test(unsigned);
+    if (!looksLikeIdentifier) return { t: "n", v: Number(trimmed), clearFormat: clearsAutomaticFormat };
+  }
+  return { t: "s", v: source, clearFormat: clearsAutomaticFormat };
+}
+
 function tokenizeFormula(formula) {
   const tokens = [];
   let index = 0;
@@ -321,6 +357,32 @@ export function cellInputText(XLSX, model, sheetName, row, col) {
   return typeof cell?.f === "string" ? `=${cell.f}` : cellDisplayText(XLSX, cell);
 }
 
+export function selectionStatistics(XLSX, model, sheetName, startRow, startCol, endRow, endCol) {
+  const worksheet = worksheetFor(model, sheetName);
+  const range = normalizedRange(startRow, startCol, endRow, endCol);
+  let nonEmptyCount = 0;
+  let numericCount = 0;
+  let sum = 0;
+  for (let row = range.s.r; row <= range.e.r; row++) {
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r: row, c: col })];
+      if (!cell || cell.v == null || cell.v === "") continue;
+      nonEmptyCount++;
+      if (cell.t !== "n") continue;
+      const value = Number(cell.v);
+      if (!Number.isFinite(value)) continue;
+      numericCount++;
+      sum += value;
+    }
+  }
+  return {
+    nonEmptyCount,
+    numericCount,
+    sum,
+    average: numericCount ? sum / numericCount : null
+  };
+}
+
 export function parseWorkbookModel(XLSX, bytes, asset) {
   if (!/\.xlsx$/i.test(String(asset || "").split("?")[0])) {
     throw new Error("为防止格式损坏，当前仅允许编辑 .xlsx 工作簿");
@@ -356,6 +418,63 @@ export function serializeWorkbookModel(XLSX, model) {
   }));
 }
 
+export function validateSerializedWorkbook(XLSX, model, bytes) {
+  let reopened;
+  try {
+    reopened = XLSX.read(bytes, {
+      type: "array",
+      cellDates: true,
+      cellFormula: true,
+      cellNF: true,
+      cellStyles: true,
+      sheetStubs: true,
+      bookVBA: true
+    });
+  } catch (error) {
+    throw new Error(`导出文件无法重新读取：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (JSON.stringify(reopened.SheetNames) !== JSON.stringify(model.workbook.SheetNames)) {
+    throw new Error("导出回读校验失败：Sheet 列表不一致");
+  }
+  const reopenedState = readSuiteState(reopened);
+  let formulaCount = 0;
+  let mergeCount = 0;
+  for (const name of model.workbook.SheetNames) {
+    const expectedSheet = model.workbook.Sheets[name];
+    const actualSheet = reopened.Sheets[name];
+    if (!actualSheet) throw new Error(`导出回读校验失败：缺少 Sheet「${name}」`);
+    const expectedFormulas = Object.entries(expectedSheet)
+      .filter(([, cell]) => cell && typeof cell === "object" && typeof cell.f === "string")
+      .map(([address, cell]) => `${address}=${cell.f}`)
+      .sort();
+    const actualFormulas = Object.entries(actualSheet)
+      .filter(([, cell]) => cell && typeof cell === "object" && typeof cell.f === "string")
+      .map(([address, cell]) => `${address}=${cell.f}`)
+      .sort();
+    if (JSON.stringify(actualFormulas) !== JSON.stringify(expectedFormulas)) {
+      throw new Error(`导出回读校验失败：Sheet「${name}」的公式不一致`);
+    }
+    const expectedMerges = (expectedSheet["!merges"] || []).map((range) => XLSX.utils.encode_range(range)).sort();
+    const actualMerges = (actualSheet["!merges"] || []).map((range) => XLSX.utils.encode_range(range)).sort();
+    if (JSON.stringify(actualMerges) !== JSON.stringify(expectedMerges)) {
+      throw new Error(`导出回读校验失败：Sheet「${name}」的合并区域不一致`);
+    }
+    const modelSheet = model.sheets.find((sheet) => sheet.name === name);
+    const expectedState = {
+      freeze: modelSheet?.freeze || { rows: 0, cols: 0 },
+      filter: modelSheet?.filter || null,
+      charts: Array.isArray(modelSheet?.charts) ? modelSheet.charts : []
+    };
+    const actualState = reopenedState[name] || { freeze: { rows: 0, cols: 0 }, filter: null, charts: [] };
+    if (JSON.stringify(actualState) !== JSON.stringify(expectedState)) {
+      throw new Error(`导出回读校验失败：Sheet「${name}」的视图状态不一致`);
+    }
+    formulaCount += expectedFormulas.length;
+    mergeCount += expectedMerges.length;
+  }
+  return { sheetCount: reopened.SheetNames.length, formulaCount, mergeCount };
+}
+
 export function sheetDimensions(sheet) {
   const rows = Math.min(MAX_RENDER_ROWS, Math.max(30, sheet.viewRows, sheet.data.length));
   const cols = Math.min(
@@ -383,15 +502,33 @@ export function setCellText(XLSX, model, sheetName, row, col, value, shouldRecor
     next.f = formula;
     next.t = "s";
     next.v = "#暂不支持";
+    if (/(?:yyyy|yy|mm|dd|¥|￥)/i.test(String(existing?.z || ""))) delete next.z;
   } else {
-    next.t = "s";
-    next.v = String(value);
+    const parsed = valueFromInput(value, existing);
+    next.t = parsed.t;
+    next.v = parsed.v;
+    if (parsed.z) next.z = parsed.z;
+    else if (parsed.clearFormat) delete next.z;
   }
   worksheet[address] = next;
   expandWorksheetRange(XLSX, worksheet, row, col);
-  ensureDataCell(sheet, row, col, formula == null ? String(value) : "#暂不支持");
+  ensureDataCell(sheet, row, col, formula == null ? cellDisplayText(XLSX, next) : "#暂不支持");
   if (shouldRecalculate) recalculateWorkbookFormulas(XLSX, model);
   record(model, { type: "setCell", sheet: sheetName, row, col, value: String(value) }, shouldRecord);
+}
+
+export function setCellsText(XLSX, model, sheetName, changes, shouldRecord = true) {
+  const normalized = [];
+  for (const change of changes || []) {
+    const row = Math.max(0, Math.trunc(Number(change?.row) || 0));
+    const col = Math.max(0, Math.trunc(Number(change?.col) || 0));
+    const value = String(change?.value ?? "");
+    setCellText(XLSX, model, sheetName, row, col, value, false, false);
+    normalized.push({ row, col, value });
+  }
+  recalculateWorkbookFormulas(XLSX, model);
+  record(model, { type: "setCells", sheet: sheetName, changes: normalized }, shouldRecord);
+  return normalized.length;
 }
 
 export function captureCellRange(XLSX, model, sheetName, startRow, startCol, rowCount, colCount) {
@@ -511,6 +648,7 @@ export function captureSheetLayout(model, sheetName) {
   if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
   return {
     merges: (worksheet["!merges"] || []).map((range) => structuredClone(range)),
+    cols: (worksheet["!cols"] || []).map((col) => col ? { ...col } : null),
     rows: (worksheet["!rows"] || []).map((row) => row ? { ...row } : null),
     freeze: structuredClone(sheet.freeze || { rows: 0, cols: 0 }),
     filter: sheet.filter ? structuredClone(sheet.filter) : null,
@@ -523,11 +661,359 @@ export function restoreSheetLayout(model, sheetName, layout, shouldRecord = true
   const worksheet = worksheetFor(model, sheetName);
   if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
   worksheet["!merges"] = (layout?.merges || []).map((range) => structuredClone(range));
+  if (Array.isArray(layout?.cols)) {
+    worksheet["!cols"] = layout.cols.map((col) => col ? { ...col } : undefined);
+  }
   worksheet["!rows"] = (layout?.rows || []).map((row) => row ? { ...row } : undefined);
   sheet.freeze = structuredClone(layout?.freeze || { rows: 0, cols: 0 });
   sheet.filter = layout?.filter ? structuredClone(layout.filter) : null;
   sheet.charts = structuredClone(layout?.charts || []);
   record(model, { type: "restoreLayout", sheet: sheetName, layout: structuredClone(layout) }, shouldRecord);
+}
+
+export function setColumnWidth(model, sheetName, col, widthPx, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const width = Math.max(40, Math.min(600, Math.round(Number(widthPx) || 110)));
+  worksheet["!cols"] ||= [];
+  const layout = {
+    ...(worksheet["!cols"][col] || {}),
+    wpx: width,
+    wch: Math.max(1, (width - 5) / 7)
+  };
+  delete layout.width;
+  delete layout.MDW;
+  worksheet["!cols"][col] = layout;
+  record(model, { type: "setColumnWidth", sheet: sheetName, col, width }, shouldRecord);
+  return width;
+}
+
+export function setRowHeight(model, sheetName, row, heightPx, shouldRecord = true) {
+  const worksheet = worksheetFor(model, sheetName);
+  const height = Math.max(20, Math.min(240, Math.round(Number(heightPx) || 28)));
+  worksheet["!rows"] ||= [];
+  worksheet["!rows"][row] = {
+    ...(worksheet["!rows"][row] || {}),
+    hpx: height,
+    hpt: height * 72 / 96
+  };
+  record(model, { type: "setRowHeight", sheet: sheetName, row, height }, shouldRecord);
+  return height;
+}
+
+function cloneWorksheet(worksheet) {
+  const copy = {};
+  for (const [key, value] of Object.entries(worksheet || {})) {
+    copy[key] = key.startsWith("!") ? structuredClone(value) : cloneCell(value);
+  }
+  return copy;
+}
+
+export function captureSheetState(model, sheetName) {
+  const sheet = model.sheets.find((item) => item.name === sheetName);
+  if (!sheet) throw new Error(`找不到 Sheet：${sheetName}`);
+  return {
+    worksheet: cloneWorksheet(worksheetFor(model, sheetName)),
+    viewRows: sheet.viewRows,
+    viewCols: sheet.viewCols,
+    freeze: structuredClone(sheet.freeze || { rows: 0, cols: 0 }),
+    filter: sheet.filter ? structuredClone(sheet.filter) : null,
+    charts: structuredClone(sheet.charts || [])
+  };
+}
+
+export function restoreSheetState(XLSX, model, sheetName, state, shouldRecord = true) {
+  const index = model.sheets.findIndex((item) => item.name === sheetName);
+  if (index < 0 || !state?.worksheet) throw new Error(`无法恢复 Sheet：${sheetName}`);
+  const worksheet = cloneWorksheet(state.worksheet);
+  model.workbook.Sheets[sheetName] = worksheet;
+  const sheet = sheetView(XLSX, sheetName, worksheet, {
+    freeze: structuredClone(state.freeze || { rows: 0, cols: 0 }),
+    filter: state.filter ? structuredClone(state.filter) : null,
+    charts: structuredClone(state.charts || [])
+  });
+  sheet.viewRows = Math.max(sheet.viewRows, Number(state.viewRows) || 0);
+  sheet.viewCols = Math.max(sheet.viewCols, Number(state.viewCols) || 0);
+  model.sheets[index] = sheet;
+  recalculateWorkbookFormulas(XLSX, model);
+  record(model, { type: "restoreSheetState", sheet: sheetName, state: captureSheetState(model, sheetName) }, shouldRecord);
+  return sheet;
+}
+
+export function captureWorkbookState(model, targetSheet = null) {
+  const sheetNames = targetSheet ? [targetSheet] : model.workbook.SheetNames;
+  if (sheetNames.some((name) => !model.workbook.Sheets[name])) {
+    throw new Error(`找不到 Sheet：${targetSheet}`);
+  }
+  return {
+    targetSheet,
+    sheets: sheetNames.map((name) => ({
+      name,
+      state: captureSheetState(model, name)
+    })),
+    formulaCells: targetSheet
+      ? Object.fromEntries(model.workbook.SheetNames
+        .filter((name) => name !== targetSheet)
+        .map((name) => [name, Object.entries(worksheetFor(model, name))
+          .filter(([, cell]) => cell && typeof cell === "object" && typeof cell.f === "string")
+          .map(([address, cell]) => [address, cloneCell(cell)])])
+        .filter(([, cells]) => cells.length > 0))
+      : null,
+    workbookNames: model.workbook.Workbook?.Names
+      ? structuredClone(model.workbook.Workbook.Names)
+      : null
+  };
+}
+
+export function restoreWorkbookState(XLSX, model, state, shouldRecord = true) {
+  if (!Array.isArray(state?.sheets) || state.sheets.length === 0) {
+    throw new Error("无法恢复工作簿状态");
+  }
+  if (state.sheets.some((item) => !model.workbook.SheetNames.includes(item?.name) || !item.state?.worksheet)) {
+    throw new Error("工作簿结构已变化，无法恢复历史状态");
+  }
+  model.workbook.Workbook ||= {};
+  if (state.workbookNames) model.workbook.Workbook.Names = structuredClone(state.workbookNames);
+  else delete model.workbook.Workbook.Names;
+  for (const item of state.sheets) restoreSheetState(XLSX, model, item.name, item.state, false);
+  for (const [sheetName, cells] of Object.entries(state.formulaCells || {})) {
+    const worksheet = worksheetFor(model, sheetName);
+    for (const [address, cell] of cells) worksheet[address] = cloneCell(cell);
+  }
+  recalculateWorkbookFormulas(XLSX, model);
+  record(model, {
+    type: "restoreWorkbookState",
+    state: captureWorkbookState(model, state.targetSheet || null)
+  }, shouldRecord);
+}
+
+function transformedIndex(value, index, count, mode) {
+  if (mode === "insert") return value >= index ? value + count : value;
+  if (value < index) return value;
+  if (value >= index + count) return value - count;
+  return null;
+}
+
+function transformedInterval(start, end, index, count, mode) {
+  if (mode === "insert") {
+    return {
+      start: start >= index ? start + count : start,
+      end: end >= index ? end + count : end
+    };
+  }
+  const deletionEnd = index + count;
+  if (end < index) return { start, end };
+  if (start >= deletionEnd) return { start: start - count, end: end - count };
+  const nextStart = start < index ? start : index;
+  const nextEnd = end >= deletionEnd ? end - count : index - 1;
+  return nextStart <= nextEnd ? { start: nextStart, end: nextEnd } : null;
+}
+
+function sheetNameFromPrefix(prefix) {
+  if (!prefix) return null;
+  const source = prefix.slice(0, -1);
+  return source.startsWith("'") && source.endsWith("'")
+    ? source.slice(1, -1).replace(/''/g, "'")
+    : source;
+}
+
+function encodeFormulaReference(XLSX, prefix, colAbsolute, rowAbsolute, row, col) {
+  const address = XLSX.utils.encode_cell({ r: row, c: col });
+  const match = /^([A-Z]+)(\d+)$/.exec(address);
+  return `${prefix}${colAbsolute}${match[1]}${rowAbsolute}${match[2]}`;
+}
+
+function transformFormulaReferences(XLSX, formula, formulaSheet, targetSheet, axis, index, count, mode) {
+  const transformSegment = (segment) => {
+  const prefixPattern = "(?:(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?";
+  const rangePattern = new RegExp(`(${prefixPattern})(\\$?)([A-Z]{1,3})(\\$?)(\\d+):(${prefixPattern})(\\$?)([A-Z]{1,3})(\\$?)(\\d+)`, "g");
+  let transformed = segment.replace(rangePattern, (
+    original,
+    firstPrefix,
+    firstColAbsolute,
+    firstLetters,
+    firstRowAbsolute,
+    firstDigits,
+    secondPrefix,
+    secondColAbsolute,
+    secondLetters,
+    secondRowAbsolute,
+    secondDigits
+  ) => {
+    const firstSheet = sheetNameFromPrefix(firstPrefix) || formulaSheet;
+    const secondSheet = sheetNameFromPrefix(secondPrefix) || firstSheet;
+    if (firstSheet !== targetSheet || secondSheet !== targetSheet) return original;
+    const first = XLSX.utils.decode_cell(`${firstLetters}${firstDigits}`);
+    const second = XLSX.utils.decode_cell(`${secondLetters}${secondDigits}`);
+    const interval = axis === "row"
+      ? transformedInterval(first.r, second.r, index, count, mode)
+      : transformedInterval(first.c, second.c, index, count, mode);
+    if (!interval) return "#REF!";
+    if (axis === "row") {
+      first.r = interval.start;
+      second.r = interval.end;
+    } else {
+      first.c = interval.start;
+      second.c = interval.end;
+    }
+    return `${encodeFormulaReference(XLSX, firstPrefix, firstColAbsolute, firstRowAbsolute, first.r, first.c)}:${encodeFormulaReference(XLSX, secondPrefix, secondColAbsolute, secondRowAbsolute, second.r, second.c)}`;
+  });
+  const singlePattern = new RegExp(`(${prefixPattern})(\\$?)([A-Z]{1,3})(\\$?)(\\d+)`, "g");
+  const protectedRanges = [];
+  transformed = transformed.replace(rangePattern, (value) => {
+    const token = `\u0000${protectedRanges.length}\u0000`;
+    protectedRanges.push(value);
+    return token;
+  });
+  transformed = transformed.replace(singlePattern, (original, prefix, colAbsolute, letters, rowAbsolute, digits) => {
+    const referencedSheet = sheetNameFromPrefix(prefix) || formulaSheet;
+    if (referencedSheet !== targetSheet) return original;
+    const position = XLSX.utils.decode_cell(`${letters}${digits}`);
+    const current = axis === "row" ? position.r : position.c;
+    const next = transformedIndex(current, index, count, mode);
+    if (next == null) return "#REF!";
+    if (axis === "row") position.r = next;
+    else position.c = next;
+    return encodeFormulaReference(XLSX, prefix, colAbsolute, rowAbsolute, position.r, position.c);
+  });
+  return transformed.replace(/\u0000(\d+)\u0000/g, (_, tokenIndex) => protectedRanges[Number(tokenIndex)]);
+  };
+  return String(formula)
+    .split(/("(?:[^"]|"")*")/g)
+    .map((segment) => segment.startsWith('"') ? segment : transformSegment(segment))
+    .join("");
+}
+
+function transformRange(XLSX, range, axis, index, count, mode) {
+  const next = structuredClone(range);
+  const interval = axis === "row"
+    ? transformedInterval(next.s.r, next.e.r, index, count, mode)
+    : transformedInterval(next.s.c, next.e.c, index, count, mode);
+  if (!interval) return null;
+  if (axis === "row") {
+    next.s.r = interval.start;
+    next.e.r = interval.end;
+  } else {
+    next.s.c = interval.start;
+    next.e.c = interval.end;
+  }
+  return next;
+}
+
+function transformFrozenCount(value, index, count, mode) {
+  const frozen = Math.max(0, Number(value) || 0);
+  if (mode === "insert") return index < frozen ? frozen + count : frozen;
+  const overlap = Math.max(0, Math.min(frozen, index + count) - Math.min(frozen, index));
+  return Math.max(0, frozen - overlap);
+}
+
+function transformWorksheetStructure(XLSX, model, sheetName, axis, index, count, mode) {
+  const sheetIndex = model.sheets.findIndex((item) => item.name === sheetName);
+  if (sheetIndex < 0) throw new Error(`找不到 Sheet：${sheetName}`);
+  const sheet = model.sheets[sheetIndex];
+  const worksheet = worksheetFor(model, sheetName);
+  const cells = [];
+  for (const [address, cell] of Object.entries(worksheet)) {
+    if (!/^[A-Z]+[1-9]\d*$/.test(address)) continue;
+    const position = XLSX.utils.decode_cell(address);
+    const current = axis === "row" ? position.r : position.c;
+    const next = transformedIndex(current, index, count, mode);
+    delete worksheet[address];
+    if (next == null) continue;
+    if (axis === "row") position.r = next;
+    else position.c = next;
+    cells.push([XLSX.utils.encode_cell(position), cloneCell(cell)]);
+  }
+  for (const [address, cell] of cells) worksheet[address] = cell;
+
+  const layoutKey = axis === "row" ? "!rows" : "!cols";
+  worksheet[layoutKey] ||= [];
+  if (mode === "insert") worksheet[layoutKey].splice(index, 0, ...Array(count));
+  else worksheet[layoutKey].splice(index, count);
+
+  worksheet["!merges"] = (worksheet["!merges"] || [])
+    .map((range) => transformRange(XLSX, range, axis, index, count, mode))
+    .filter(Boolean);
+
+  const usedRange = worksheet["!ref"] ? XLSX.utils.decode_range(worksheet["!ref"]) : XLSX.utils.decode_range("A1:A1");
+  const nextUsedRange = transformRange(XLSX, usedRange, axis, index, count, mode);
+  worksheet["!ref"] = XLSX.utils.encode_range(nextUsedRange || XLSX.utils.decode_range("A1:A1"));
+  if (worksheet["!autofilter"]?.ref) {
+    const filterRange = transformRange(XLSX, XLSX.utils.decode_range(worksheet["!autofilter"].ref), axis, index, count, mode);
+    if (filterRange) worksheet["!autofilter"].ref = XLSX.utils.encode_range(filterRange);
+    else delete worksheet["!autofilter"];
+  }
+
+  const freeze = structuredClone(sheet.freeze || { rows: 0, cols: 0 });
+  if (axis === "row") freeze.rows = transformFrozenCount(freeze.rows, index, count, mode);
+  else freeze.cols = transformFrozenCount(freeze.cols, index, count, mode);
+  let filter = sheet.filter ? structuredClone(sheet.filter) : null;
+  if (axis === "col" && filter) {
+    const nextCol = transformedIndex(filter.col, index, count, mode);
+    filter = nextCol == null ? null : { ...filter, col: nextCol };
+  }
+  const charts = (sheet.charts || []).flatMap((chart) => {
+    try {
+      const range = transformRange(XLSX, XLSX.utils.decode_range(chart.range), axis, index, count, mode);
+      return range ? [{ ...structuredClone(chart), range: XLSX.utils.encode_range(range) }] : [];
+    } catch {
+      return [structuredClone(chart)];
+    }
+  });
+
+  const viewRows = axis === "row"
+    ? Math.max(30, sheet.viewRows + (mode === "insert" ? count : -count))
+    : sheet.viewRows;
+  const viewCols = axis === "col"
+    ? Math.max(15, sheet.viewCols + (mode === "insert" ? count : -count))
+    : sheet.viewCols;
+  const refreshed = sheetView(XLSX, sheetName, worksheet, { freeze, filter, charts });
+  refreshed.viewRows = Math.max(refreshed.viewRows, viewRows);
+  refreshed.viewCols = Math.max(refreshed.viewCols, viewCols);
+  model.sheets[sheetIndex] = refreshed;
+
+  for (const formulaSheetName of model.workbook.SheetNames) {
+    const formulaWorksheet = worksheetFor(model, formulaSheetName);
+    for (const cell of Object.values(formulaWorksheet)) {
+      if (cell && typeof cell === "object" && typeof cell.f === "string") {
+        cell.f = transformFormulaReferences(XLSX, cell.f, formulaSheetName, sheetName, axis, index, count, mode);
+        delete cell.w;
+      }
+    }
+  }
+  for (const name of model.workbook.Workbook?.Names || []) {
+    if (typeof name.Ref === "string") {
+      name.Ref = transformFormulaReferences(XLSX, name.Ref, null, sheetName, axis, index, count, mode);
+    }
+  }
+  recalculateWorkbookFormulas(XLSX, model);
+}
+
+function structuralOperation(XLSX, model, sheetName, axis, index, count, mode, shouldRecord) {
+  const safeIndex = Math.max(0, Math.trunc(Number(index) || 0));
+  const safeCount = Math.max(1, Math.trunc(Number(count) || 1));
+  transformWorksheetStructure(XLSX, model, sheetName, axis, safeIndex, safeCount, mode);
+  record(model, {
+    type: `${mode}${axis === "row" ? "Rows" : "Columns"}`,
+    sheet: sheetName,
+    index: safeIndex,
+    count: safeCount
+  }, shouldRecord);
+}
+
+export function insertRows(XLSX, model, sheetName, index, count = 1, shouldRecord = true) {
+  structuralOperation(XLSX, model, sheetName, "row", index, count, "insert", shouldRecord);
+}
+
+export function deleteRows(XLSX, model, sheetName, index, count = 1, shouldRecord = true) {
+  structuralOperation(XLSX, model, sheetName, "row", index, count, "delete", shouldRecord);
+}
+
+export function insertColumns(XLSX, model, sheetName, index, count = 1, shouldRecord = true) {
+  structuralOperation(XLSX, model, sheetName, "col", index, count, "insert", shouldRecord);
+}
+
+export function deleteColumns(XLSX, model, sheetName, index, count = 1, shouldRecord = true) {
+  structuralOperation(XLSX, model, sheetName, "col", index, count, "delete", shouldRecord);
 }
 
 function cssColor(color) {
@@ -862,6 +1348,8 @@ export function applyRecoveryPayload(XLSX, model, payload) {
   for (const operation of payload.operations) {
     if (operation?.type === "setCell") {
       setCellText(XLSX, model, operation.sheet, operation.row, operation.col, operation.value, false);
+    } else if (operation?.type === "setCells") {
+      setCellsText(XLSX, model, operation.sheet, operation.changes, false);
     } else if (operation?.type === "setRange") {
       setCellRange(XLSX, model, operation.sheet, operation.row, operation.col, operation.values, false);
     } else if (operation?.type === "restoreRange") {
@@ -886,6 +1374,22 @@ export function applyRecoveryPayload(XLSX, model, payload) {
       removeSheetChart(model, operation.sheet, operation.chartId, false);
     } else if (operation?.type === "restoreLayout") {
       restoreSheetLayout(model, operation.sheet, operation.layout, false);
+    } else if (operation?.type === "setColumnWidth") {
+      setColumnWidth(model, operation.sheet, operation.col, operation.width, false);
+    } else if (operation?.type === "setRowHeight") {
+      setRowHeight(model, operation.sheet, operation.row, operation.height, false);
+    } else if (operation?.type === "insertRows") {
+      insertRows(XLSX, model, operation.sheet, operation.index, operation.count, false);
+    } else if (operation?.type === "deleteRows") {
+      deleteRows(XLSX, model, operation.sheet, operation.index, operation.count, false);
+    } else if (operation?.type === "insertColumns") {
+      insertColumns(XLSX, model, operation.sheet, operation.index, operation.count, false);
+    } else if (operation?.type === "deleteColumns") {
+      deleteColumns(XLSX, model, operation.sheet, operation.index, operation.count, false);
+    } else if (operation?.type === "restoreSheetState") {
+      restoreSheetState(XLSX, model, operation.sheet, operation.state, false);
+    } else if (operation?.type === "restoreWorkbookState") {
+      restoreWorkbookState(XLSX, model, operation.state, false);
     } else if (operation?.type === "addSheet") {
       addWorksheet(XLSX, model, operation.name, false);
     } else if (operation?.type === "renameSheet") {

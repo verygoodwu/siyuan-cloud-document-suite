@@ -7,7 +7,7 @@ import JSZip from "jszip";
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
-const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm35`;
+const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm47`;
 
 interface KernelResponse<T> {
   code: number;
@@ -59,8 +59,10 @@ const EMBED_RESET_CSS = `
   width: 100% !important;
   display: block !important;
 }
-.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content > .protyle-action__drag,
-.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .iframe-content > .protyle-action__drag::after {
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) .protyle-action__drag,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) .protyle-action__drag::after,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .protyle-action__drag,
+.protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}) > .protyle-action__drag::after {
   display: none !important;
   opacity: 0 !important;
   box-shadow: none !important;

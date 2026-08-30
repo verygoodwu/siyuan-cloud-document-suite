@@ -19,6 +19,7 @@ await Promise.all([
   copyFile("preview.png", "dist/preview.png")
   ,copyVersionedHtml("static/mm-editor.html", "dist/mm-editor.html")
   ,copyFile("static/mm-editor.js", "dist/mm-editor.js")
+  ,copyFile("static/mm-workspace.js", "dist/mm-workspace.js")
   ,copyFile("node_modules/mind-elixir/dist/MindElixir.js", "dist/MindElixir.js")
   ,copyFile("node_modules/mind-elixir/dist/MindElixir.css", "dist/MindElixir.css")
   ,copyVersionedHtml("static/sheet-editor.html", "dist/sheet-editor.html")

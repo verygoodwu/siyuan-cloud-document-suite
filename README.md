@@ -6,6 +6,13 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Changelog (short version)
 
+- **v1.9.2**: Restores each branch's original collapse state after search, coalesces mind-map render/decorate work for smoother large maps, makes Tab/Enter/Shift+Enter/Ctrl+Enter create-and-edit shortcuts consistently undoable, and lets Escape leave branch focus while restoring the previous viewport.
+- **v1.9.1**: Adds a searchable mind-map outline with canvas selection linking, direct editing after Tab, reliable keyboard undo, discoverable shortcut help, Ctrl+/ branch toggling, Ctrl+Home root navigation, safe branch focus with an always-visible exit, and steadier Chinese long-text input.
+- **v1.9.0**: Stabilizes the lightweight spreadsheet workspace with post-write SHA-256 verification, export round-trip checks for sheets/formulas/merges/view state, visible save-failure blocking, duplicate-export protection, and narrow-window layout cleanup.
+- **v1.8.5**: Refines spreadsheet editing with direct-type replacement, F2/double-click in-cell editing, Escape cancellation, selection count/sum/average, keyboard-driven formula suggestions, and merged-cell-aware navigation. A full 500×50 selection statistics test remains lightweight without a Worker.
+- **v1.8.4**: Adds find/replace and replace-all with case, selection, and formula-source options; recognizes strict dates and RMB input; adds formula hints and concise error explanations; improves Home/End and Ctrl+Arrow navigation; and reports large paste progress/results without adding a Worker.
+- **v1.8.3**: Adds row and column insertion/deletion, Shift/drag range selection, context-menu actions, and keyboard shortcuts. Formulas, cross-sheet references, merged ranges, dimensions, freezes, filters, and chart ranges move with the structure, with workbook-aware undo/redo, recovery, and save round-trip coverage.
+- **v1.8.2**: Improves lightweight spreadsheet input by storing numbers and percentages as numeric cells while preserving leading-zero identifiers as text; adds draggable row heights and column widths, auto-fit on double click, undo/recovery support, and XLSX round-trip coverage.
 - **v1.8.1**: Refined mind-map alignment, collapse controls, editing and viewport stability; expanded spreadsheet editing and formatting; promoted file creation to the top-level document-tree menu; fixed versioned editor dependencies; and reduced the transparent marketplace icon below the Bazaar size limit.
 - **v1.8.0**: Added spreadsheet range selection, copy/paste, undo/redo, keyboard navigation, current-sheet search, lightweight formula calculation and dependency refresh, plus a cleaner marketplace icon.
 - **v1.7.0**: Refined the default `.mm` hierarchy view with Feishu-style orthogonal branches, placeholder nodes, and formatting; removed summaries/custom links; prevented new mind maps and spreadsheets from reusing stale assets; and expanded deletion, conflict, and recovery safeguards.
@@ -25,13 +32,13 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Next
 
-Development will next focus on improving `.mm` and Excel support, including format compatibility, editing capabilities, data preservation, and large-file usability.
+Development currently focuses on a lightweight, responsive spreadsheet experience inside SiYuan: common input, row/column operations, editing ergonomics, reliable automatic saving, and safe export. Complex Excel compatibility and Web Worker adoption are intentionally deferred.
 
 ## Features
 
 - Drag files from Windows Explorer onto a document or notebook in the document tree. The plugin uploads the source file and creates a same-named child document.
 - Inline PDF preview with the original attachment retained.
-- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, range copy/paste, undo/redo, keyboard navigation, current-sheet search, common formula calculation, automatic SiYuan asset persistence, and `.xlsx` export.
+- Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, range copy/paste, row/column insertion, deletion and resizing, undo/redo, keyboard navigation, find/replace, common formula calculation, automatic SiYuan asset persistence, and `.xlsx` export.
 - `.docx` content conversion with the original attachment retained, plus a context-menu action for creating Word documents.
 - XMind import for both modern `content.json` and legacy `content.xml` packages.
 - Live FreeMind/Freeplane `.mm` editing with draggable nodes, automatic SiYuan asset persistence, and standards-compatible `.mm` export.
