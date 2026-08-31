@@ -4,27 +4,12 @@ import * as mammoth from "mammoth";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
+import { KernelClient } from "./kernel-client";
+import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
 const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm47`;
-
-interface KernelResponse<T> {
-  code: number;
-  msg: string;
-  data: T;
-}
-
-interface AssetUploadData {
-  errFiles: string[];
-  succMap: Record<string, string>;
-}
-
-interface UploadedAsset {
-  originalName: string;
-  assetPath: string;
-  documentMarkdown?: string;
-}
 
 const EDITOR_SELECTOR = ".protyle-wysiwyg";
 const BLOCK_SELECTOR = "[data-node-id]";
@@ -70,23 +55,8 @@ const EMBED_RESET_CSS = `
 }
 `;
 
-interface DropTarget {
-  id: string;
-  position: "after-block" | "create-child-documents" | "create-root-documents";
-}
-
-interface DocumentPathData {
-  notebook: string;
-  path: string;
-}
-
-interface DocTreeMenuDetail {
-  menu: { addItem(item: IMenu): void };
-  type: "doc" | "docs" | "notebook" | "notebooks" | "items";
-  items: { id: string; path: string }[];
-}
-
 class DropImporterPlugin extends Plugin {
+  private readonly api = new KernelClient();
   private dragDepth = 0;
   private overlay: HTMLDivElement | null = null;
   private toastTimer: number | null = null;
@@ -276,7 +246,7 @@ class DropImporterPlugin extends Plugin {
     this.showToast("正在创建脑图…");
     try {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1" CLOUD_DIRECTION="1" CLOUD_VIEW_STYLE="hierarchy"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
-      const asset = await this.uploadAsset(
+      const asset = await this.api.uploadAsset(
         new File([xml], this.buildUniqueUploadName("新建脑图.mm"), {
           type: "application/xml"
         })
@@ -346,7 +316,7 @@ class DropImporterPlugin extends Plugin {
         bookType: "xlsx",
         type: "array"
       }) as ArrayBuffer;
-      const asset = await this.uploadAsset(
+      const asset = await this.api.uploadAsset(
         new File([content], this.buildUniqueUploadName("新建 Excel 工作簿.xlsx"), {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         })
@@ -491,7 +461,7 @@ class DropImporterPlugin extends Plugin {
     for (const [index, file] of files.entries()) {
       this.showToast(`正在导入 ${index + 1}/${files.length}：${file.name}…`);
       try {
-        const asset = await this.uploadAsset(file);
+        const asset = await this.api.uploadAsset(file);
         try {
           if (this.isMarkdownFile(file.name)) {
             asset.documentMarkdown = await file.text();
@@ -568,29 +538,6 @@ class DropImporterPlugin extends Plugin {
     await this.recordDebug("import-complete", { uploaded, failedCount });
   }
 
-  private async uploadAsset(file: File): Promise<UploadedAsset> {
-    const form = new FormData();
-    form.append("assetsDirPath", "/assets/");
-    form.append("file[]", file, file.name);
-
-    const response = await fetch("/api/asset/upload", {
-      method: "POST",
-      body: form
-    });
-
-    if (!response.ok) {
-      throw new Error(`Upload request failed with HTTP ${response.status}`);
-    }
-
-    const result = (await response.json()) as KernelResponse<AssetUploadData>;
-    const assetPath = result.data?.succMap?.[file.name];
-    if (result.code !== 0 || !assetPath) {
-      throw new Error(result.msg || "The kernel did not return an asset path");
-    }
-
-    return { originalName: file.name, assetPath };
-  }
-
   private buildUniqueUploadName(fileName: string): string {
     const dotIndex = fileName.lastIndexOf(".");
     const stem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
@@ -605,24 +552,11 @@ class DropImporterPlugin extends Plugin {
     assets: UploadedAsset[]
   ): Promise<void> {
     const markdown = this.buildAttachmentMarkdown(assets);
-    const response = await fetch("/api/block/insertBlock", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    await this.api.postJson<unknown>("/api/block/insertBlock", {
         dataType: "markdown",
         data: markdown,
         previousID: target.id
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Insert request failed with HTTP ${response.status}`);
-    }
-
-    const result = (await response.json()) as KernelResponse<unknown>;
-    if (result.code !== 0) {
-      throw new Error(result.msg || "The kernel rejected the block insertion");
-    }
+      });
   }
 
   private async createChildDocuments(
@@ -701,20 +635,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   private async postJson<T>(endpoint: string, body: unknown): Promise<T> {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) {
-      throw new Error(`${endpoint} failed with HTTP ${response.status}`);
-    }
-
-    const result = (await response.json()) as KernelResponse<T>;
-    if (result.code !== 0) {
-      throw new Error(result.msg || `${endpoint} was rejected by the kernel`);
-    }
-    return result.data;
+    return this.api.postJson<T>(endpoint, body);
   }
 
   private refreshCloudDocumentEmbeds(): void {
