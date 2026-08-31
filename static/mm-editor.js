@@ -654,6 +654,36 @@ function redrawVisibleBranches() {
       ));
     });
   }
+
+  // While MindElixir is editing a topic it hides the real <me-tpc> and places
+  // #input-box beside it. Bind that one connector to the visible editor box,
+  // otherwise the path can be calculated against the hidden topic's stale
+  // rectangle and appear to disappear.
+  const input = document.querySelector("#input-box");
+  const editingId = input?.dataset.keyboardNodeId;
+  if (input && editingId) {
+    for (const wrapper of mainWrappers) {
+      const svg = wrapper.querySelector(":scope > svg.subLines");
+      if (!svg) continue;
+      const connections = [];
+      collectSubConnections(wrapper, connections);
+      const matchIndex = connections.findIndex(({ childTopic }) => childTopic.nodeObj?.id === editingId);
+      if (matchIndex < 0) continue;
+      const { parentTopic } = connections[matchIndex];
+      const path = svg.querySelectorAll("path")[matchIndex];
+      const left = wrapper.parentElement?.classList.contains("lhs") === true;
+      if (path && parentTopic) {
+        path.setAttribute("d", branchPathFromRects(
+          svg,
+          parentTopic.getBoundingClientRect(),
+          input.getBoundingClientRect(),
+          left,
+          15
+        ));
+      }
+      break;
+    }
+  }
 }
 
 function restoreViewportAnchor(mind, anchor) {
