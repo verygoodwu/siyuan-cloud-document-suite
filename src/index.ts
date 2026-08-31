@@ -9,6 +9,7 @@ import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
 import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
 import { Diagnostics } from "./diagnostics";
+import { DragDropController } from "./drag-drop-controller";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -91,14 +92,23 @@ class DropImporterPlugin extends Plugin {
   private readonly observedEmbedContents = new Set<HTMLElement>();
   private embedResizeObserver: ResizeObserver | null = null;
   private readonly diagnostics = new Diagnostics((name, data) => this.saveData(name, data));
+  private readonly dragController = new DragDropController({
+    isFileDrag: (event) => this.isFileDrag(event),
+    isSupportedPoint: (event) => this.isSupportedPoint(event),
+    findDropTarget: (event) => this.findDropTarget(event),
+    findTreeDropTarget: (event) => this.findTreeDropTarget(event),
+    describeDrop: (event, target, files) => this.describeDrop(event, target, files),
+    importFiles: (files, target) => this.importFiles(files, target),
+    showOverlay: () => this.showOverlay(),
+    removeOverlay: () => this.removeOverlay(),
+    showToast: (message, error) => this.showToast(message, error),
+    recordDebug: (stage, details) => this.recordDebug(stage, details)
+  });
 
   public onload(): void {
     // Window capture runs before SiYuan's editor handlers, so the plugin can
     // reliably take ownership of external file drops.
-    window.addEventListener("dragenter", this.onDragEnter, true);
-    window.addEventListener("dragleave", this.onDragLeave, true);
-    window.addEventListener("dragover", this.onDragOver, true);
-    window.addEventListener("drop", this.onDrop, true);
+    this.dragController.start();
     this.embedResetStyle = document.createElement("style");
     this.embedResetStyle.dataset.cloudDocumentSuite = "borderless-embeds";
     this.embedResetStyle.textContent = EMBED_RESET_CSS;
@@ -131,10 +141,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   public onunload(): void {
-    window.removeEventListener("dragenter", this.onDragEnter, true);
-    window.removeEventListener("dragleave", this.onDragLeave, true);
-    window.removeEventListener("dragover", this.onDragOver, true);
-    window.removeEventListener("drop", this.onDrop, true);
+    this.dragController.stop();
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
     this.embedResetStyle?.remove();
     this.embedResetStyle = null;
@@ -346,24 +353,9 @@ class DropImporterPlugin extends Plugin {
   }
 
   private bindFileTrees(): void {
-    for (const tree of this.boundTrees) {
-      if (tree.isConnected) continue;
-      tree.removeEventListener("dragenter", this.onTreeDragEnter, true);
-      tree.removeEventListener("dragover", this.onTreeDragOver, true);
-      tree.removeEventListener("drop", this.onTreeDrop, true);
-      this.boundTrees.delete(tree);
-    }
-    let added = 0;
-    for (const tree of document.querySelectorAll<HTMLElement>(FILE_TREE_SELECTOR)) {
-      if (this.boundTrees.has(tree)) continue;
-      tree.addEventListener("dragenter", this.onTreeDragEnter, true);
-      tree.addEventListener("dragover", this.onTreeDragOver, true);
-      tree.addEventListener("drop", this.onTreeDrop, true);
-      this.boundTrees.add(tree);
-      added += 1;
-    }
+    const added = this.dragController.bindTrees();
     if (added > 0) {
-      void this.recordDebug("tree-bound", { added, treeCount: this.boundTrees.size });
+      void this.recordDebug("tree-bound", { added, treeCount: this.dragController.treeCount });
     }
   }
 
