@@ -355,6 +355,18 @@ function resizeMindInputBox(input) {
   input.style.height = `${Math.max(34, input.scrollHeight)}px`;
 }
 
+function alignMindInputBox(mind, topic, input) {
+  if (!(input instanceof HTMLElement) || !topic || !mind?.nodes) return;
+  const hostRect = mind.nodes.getBoundingClientRect();
+  const topicRect = topic.getBoundingClientRect();
+  const scaleX = hostRect.width && mind.nodes.offsetWidth ? hostRect.width / mind.nodes.offsetWidth : 1;
+  const scaleY = hostRect.height && mind.nodes.offsetHeight ? hostRect.height / mind.nodes.offsetHeight : 1;
+  input.style.left = `${(topicRect.left - hostRect.left) / scaleX}px`;
+  input.style.top = `${(topicRect.top - hostRect.top) / scaleY}px`;
+  input.style.right = "auto";
+  input.style.minWidth = `${Math.max(72, topicRect.width / scaleX - 8)}px`;
+}
+
 function selectAndCenterMindNode(mind, nodeId) {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const topic = findMindTopic(mind, nodeId);
@@ -1021,6 +1033,7 @@ function editKeyboardNode(mind, node) {
       // Recalculate branches once it is mounted so Tab-created nodes do not
       // appear offset from their connector while the user is typing.
       requestAnimationFrame(() => {
+        alignMindInputBox(mind, newTopic, input);
         resizeMindInputBox(input);
         redrawVisibleBranches();
       });
@@ -1047,6 +1060,7 @@ function beginDirectMindEditing(mind, event) {
     input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: event.key }));
     input.focus();
     placeCaretAtEnd(input);
+    alignMindInputBox(mind, topic, input);
     resizeMindInputBox(input);
     redrawVisibleBranches();
   });
@@ -1410,6 +1424,10 @@ try {
   document.addEventListener("input", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target.id !== "input-box") return;
+    if (target.dataset.keyboardNodeId) {
+      const topic = findMindTopic(mind, target.dataset.keyboardNodeId);
+      if (topic) alignMindInputBox(mind, topic, target);
+    }
     resizeMindInputBox(target);
     if (target.dataset.keyboardNodeId) {
       target.dataset.keyboardDirty = String(
