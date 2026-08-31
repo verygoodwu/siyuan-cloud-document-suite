@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import { KernelClient } from "./kernel-client";
 import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
 import { PreviewBuilders } from "./preview-builders";
+import { EmbedManager } from "./embed-manager";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -79,8 +80,15 @@ class DropImporterPlugin extends Plugin {
   private treeObserverTimer: number | null = null;
   private menuPromotionTimers = new Set<number>();
   private embedResetStyle: HTMLStyleElement | null = null;
+  private readonly embeds = new EmbedManager(
+    EDITOR_SELECTOR,
+    CLOUD_DOCUMENT_EDITOR_IFRAME,
+    PLUGIN_VERSION,
+    MM_EDITOR_CACHE_VERSION
+  );
+  // Kept only for the legacy wrapper below during the staged refactor.
+  private readonly observedEmbedContents = new Set<HTMLElement>();
   private embedResizeObserver: ResizeObserver | null = null;
-  private observedEmbedContents = new Set<HTMLElement>();
   private debug: Record<string, unknown> = {};
 
   public onload(): void {
@@ -94,9 +102,7 @@ class DropImporterPlugin extends Plugin {
     this.embedResetStyle.dataset.cloudDocumentSuite = "borderless-embeds";
     this.embedResetStyle.textContent = EMBED_RESET_CSS;
     (document.head || document.documentElement).append(this.embedResetStyle);
-    this.refreshCloudDocumentEmbeds();
-    this.embedResizeObserver = new ResizeObserver(() => this.fitCloudDocumentEmbeds());
-    this.fitCloudDocumentEmbeds();
+    this.embeds.start();
     this.eventBus.on("open-menu-doctree", this.onOpenDocTreeMenu);
     void this.recordDebug("onload");
     showMessage("云文档套件已启动", 3000, "info");
@@ -104,14 +110,14 @@ class DropImporterPlugin extends Plugin {
 
   public onLayoutReady(): void {
     this.bindFileTrees();
-    this.refreshCloudDocumentEmbeds();
-    this.fitCloudDocumentEmbeds();
+    this.embeds.refresh();
+    this.embeds.fit();
     this.treeObserver = new MutationObserver((records) => {
-      if (this.mutationsAffectCloudDocument(records)) {
+      if (this.embeds.affects(records)) {
         // MutationObserver callbacks run before the next paint. Fit the newly
         // inserted editor immediately so the 720px fallback is never visible.
-        this.refreshCloudDocumentEmbeds();
-        this.fitCloudDocumentEmbeds();
+        this.embeds.refresh();
+        this.embeds.fit();
       }
       if (this.treeObserverTimer !== null) window.clearTimeout(this.treeObserverTimer);
       this.treeObserverTimer = window.setTimeout(() => {
@@ -131,9 +137,7 @@ class DropImporterPlugin extends Plugin {
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
     this.embedResetStyle?.remove();
     this.embedResetStyle = null;
-    this.embedResizeObserver?.disconnect();
-    this.embedResizeObserver = null;
-    this.observedEmbedContents.clear();
+    this.embeds.stop();
     this.treeObserver?.disconnect();
     this.treeObserver = null;
     if (this.treeObserverTimer !== null) {

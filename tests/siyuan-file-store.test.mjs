@@ -296,14 +296,15 @@ test("an external asset update triggers conflict protection and keeps recovery",
 });
 
 test("editor sources keep automatic save and readable borderless layouts", async () => {
-  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript, documentCreatorSource] = await Promise.all([
+  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript, documentCreatorSource, embedSource] = await Promise.all([
     readFile(new URL("../static/sheet-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/sheet-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8"),
-    readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8")
+    readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/embed-manager.ts", import.meta.url), "utf8")
   ]);
 
   assert.doesNotMatch(sheetHtml, /id="save"/);
@@ -505,12 +506,12 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetScript, /\.\/sheet-workbook\.js\?v=__PLUGIN_VERSION__/);
   assert.match(sheetScript, /setTimeout\(\(\) => void persist\(false\), 700\)/);
   assert.match(mindScript, /setTimeout\(\(\) => void persistMind\(false\), 700\)/);
-  assert.match(pluginSource, /refreshCloudDocumentEmbeds/);
+  assert.match(embedSource, /class EmbedManager/);
   assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm47`/);
   assert.match(pluginSource, /searchParams\.set\("v", editorVersion\)/);
-  assert.match(pluginSource, /fitCloudDocumentEmbeds/);
-  assert.match(pluginSource, /mutationsAffectCloudDocument\(records\)/);
-  assert.match(pluginSource, /this\.refreshCloudDocumentEmbeds\(\);\s*this\.fitCloudDocumentEmbeds\(\);/);
+  assert.match(embedSource, /refresh\(\)/);
+  assert.match(embedSource, /affects\(records:/);
+  assert.match(pluginSource, /this\.embeds\.refresh\(\);\s*this\.embeds\.fit\(\);/);
   assert.match(pluginSource, /--cloud-document-inline-extra/);
   assert.match(pluginSource, /contentRect\.bottom - blockRect\.top/);
 });
