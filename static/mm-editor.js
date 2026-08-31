@@ -661,13 +661,22 @@ function redrawVisibleBranches() {
   // rectangle and appear to disappear.
   const input = document.querySelector("#input-box");
   const editingId = input?.dataset.keyboardNodeId;
-  if (input && editingId) {
+  // Normal mouse editing does not set keyboardNodeId. MindElixir hides the
+  // edited topic by setting inline opacity to 0, so use that as a fallback.
+  const hiddenTopic = input && !editingId
+    ? Array.from(document.querySelectorAll("me-tpc")).find((topic) => topic.style.opacity === "0")
+    : undefined;
+  if (input && (editingId || hiddenTopic)) {
     for (const wrapper of mainWrappers) {
       const svg = wrapper.querySelector(":scope > svg.subLines");
       if (!svg) continue;
       const connections = [];
       collectSubConnections(wrapper, connections);
-      const matchIndex = connections.findIndex(({ childTopic }) => childTopic.nodeObj?.id === editingId);
+      const matchIndex = connections.findIndex(({ childTopic }) => (
+        editingId
+          ? childTopic.nodeObj?.id === editingId
+          : childTopic === hiddenTopic
+      ));
       if (matchIndex < 0) continue;
       const { parentTopic } = connections[matchIndex];
       const path = svg.querySelectorAll("path")[matchIndex];
