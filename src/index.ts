@@ -8,6 +8,7 @@ import { KernelClient } from "./kernel-client";
 import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
 import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
+import { Diagnostics } from "./diagnostics";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -89,7 +90,7 @@ class DropImporterPlugin extends Plugin {
   // Kept only for the legacy wrapper below during the staged refactor.
   private readonly observedEmbedContents = new Set<HTMLElement>();
   private embedResizeObserver: ResizeObserver | null = null;
-  private debug: Record<string, unknown> = {};
+  private readonly diagnostics = new Diagnostics((name, data) => this.saveData(name, data));
 
   public onload(): void {
     // Window capture runs before SiYuan's editor handlers, so the plugin can
@@ -923,12 +924,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   private async recordDebug(stage: string, details: Record<string, unknown> = {}): Promise<void> {
-    this.debug = { stage, time: new Date().toISOString(), ...details };
-    try {
-      await this.saveData("drop-debug.json", this.debug);
-    } catch (error) {
-      console.error("[Drop Importer] Cannot save diagnostics", error);
-    }
+    await this.diagnostics.record(stage, details);
   }
 
   private escapeMarkdownLabel(value: string): string {
