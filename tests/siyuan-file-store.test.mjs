@@ -394,9 +394,9 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.doesNotMatch(mindScript, /rightDragMoved|rightDragStart/);
   assert.match(mindHtml, /Tab：子节点.*Enter：同级节点.*Ctrl\+\/：收起或展开.*\?：快捷键/);
   assert.doesNotMatch(packageScript, /f\.button === 2/);
-  assert.match(pluginSource, /this\.buildUniqueUploadName\("新建脑图\.mm"\)/);
+  assert.match(pluginSource, /buildUniqueUploadName\("新建脑图\.mm"\)/);
   assert.match(pluginSource, /asset\.originalName = "新建脑图\.mm"/);
-  assert.match(pluginSource, /this\.buildUniqueUploadName\("新建 Excel 工作簿\.xlsx"\)/);
+  assert.match(pluginSource, /buildUniqueUploadName\("新建 Excel 工作簿\.xlsx"\)/);
   assert.match(pluginSource, /asset\.originalName = "新建 Excel 工作簿\.xlsx"/);
   assert.match(pluginSource, /<map version="1\.0\.1" CLOUD_DIRECTION="1" CLOUD_VIEW_STYLE="hierarchy"><node ID="root" TEXT="中心主题" STYLE="bubble"\/><\/map>/);
   assert.match(pluginSource, /id: "cloud-document-create-menu"/);

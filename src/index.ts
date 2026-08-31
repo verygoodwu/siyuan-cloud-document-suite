@@ -6,6 +6,16 @@ import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
 import { KernelClient } from "./kernel-client";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
+import {
+  buildUniqueUploadName,
+  isFreeMindFile,
+  isMarkdownFile,
+  isPdfFile,
+  isSpreadsheetFile,
+  isWordFile,
+  isXMindFile,
+  isZipContent
+} from "./file-types";
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
@@ -247,7 +257,7 @@ class DropImporterPlugin extends Plugin {
     try {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<map version="1.0.1" CLOUD_DIRECTION="1" CLOUD_VIEW_STYLE="hierarchy"><node ID="root" TEXT="中心主题" STYLE="bubble"/></map>`;
       const asset = await this.api.uploadAsset(
-        new File([xml], this.buildUniqueUploadName("新建脑图.mm"), {
+        new File([xml], buildUniqueUploadName("新建脑图.mm"), {
           type: "application/xml"
         })
       );
@@ -317,7 +327,7 @@ class DropImporterPlugin extends Plugin {
         type: "array"
       }) as ArrayBuffer;
       const asset = await this.api.uploadAsset(
-        new File([content], this.buildUniqueUploadName("新建 Excel 工作簿.xlsx"), {
+        new File([content], buildUniqueUploadName("新建 Excel 工作簿.xlsx"), {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         })
       );
@@ -463,28 +473,28 @@ class DropImporterPlugin extends Plugin {
       try {
         const asset = await this.api.uploadAsset(file);
         try {
-          if (this.isMarkdownFile(file.name)) {
+          if (isMarkdownFile(file.name)) {
             asset.documentMarkdown = await file.text();
           } else if (/\.xmd$/i.test(file.name)) {
             const content = await file.arrayBuffer();
-            asset.documentMarkdown = this.isZipContent(content)
+            asset.documentMarkdown = isZipContent(content)
               ? await this.buildXMindPreviewMarkdown(asset, content)
               : new TextDecoder().decode(content);
-          } else if (this.isPdfFile(file.name)) {
+          } else if (isPdfFile(file.name)) {
             asset.documentMarkdown = this.buildPdfPreviewMarkdown(asset);
-          } else if (this.isSpreadsheetFile(file.name)) {
+          } else if (isSpreadsheetFile(file.name)) {
             asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
-          } else if (this.isWordFile(file.name)) {
+          } else if (isWordFile(file.name)) {
             asset.documentMarkdown = await this.buildWordPreviewMarkdown(
               asset,
               await file.arrayBuffer()
             );
-          } else if (this.isXMindFile(file.name)) {
+          } else if (isXMindFile(file.name)) {
             asset.documentMarkdown = await this.buildXMindPreviewMarkdown(
               asset,
               await file.arrayBuffer()
             );
-          } else if (this.isFreeMindFile(file.name)) {
+          } else if (isFreeMindFile(file.name)) {
             asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(
               asset,
               await file.text()
@@ -536,15 +546,6 @@ class DropImporterPlugin extends Plugin {
       failedCount > 0
     );
     await this.recordDebug("import-complete", { uploaded, failedCount });
-  }
-
-  private buildUniqueUploadName(fileName: string): string {
-    const dotIndex = fileName.lastIndexOf(".");
-    const stem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
-    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : "";
-    const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "").slice(0, 8)
-      ?? Math.random().toString(36).slice(2, 10);
-    return `${stem}-${Date.now()}-${random}${extension}`;
   }
 
   private async insertAttachmentBlock(
@@ -720,30 +721,6 @@ class DropImporterPlugin extends Plugin {
       .join("  \n");
   }
 
-  private isMarkdownFile(fileName: string): boolean {
-    return /\.(?:md|markdown)$/i.test(fileName);
-  }
-
-  private isPdfFile(fileName: string): boolean {
-    return /\.pdf$/i.test(fileName);
-  }
-
-  private isSpreadsheetFile(fileName: string): boolean {
-    return /\.xlsx$/i.test(fileName);
-  }
-
-  private isWordFile(fileName: string): boolean {
-    return /\.docx$/i.test(fileName);
-  }
-
-  private isXMindFile(fileName: string): boolean {
-    return /\.xmind$/i.test(fileName);
-  }
-
-  private isFreeMindFile(fileName: string): boolean {
-    return /\.mm$/i.test(fileName);
-  }
-
   private async buildFreeMindPreviewMarkdown(
     asset: UploadedAsset,
     xml: string
@@ -759,11 +736,6 @@ class DropImporterPlugin extends Plugin {
     if (!root) throw new Error("FreeMind root node not found");
     const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(MM_EDITOR_CACHE_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
     return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
-  }
-
-  private isZipContent(content: ArrayBuffer): boolean {
-    const bytes = new Uint8Array(content, 0, Math.min(4, content.byteLength));
-    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;
   }
 
   private async buildXMindPreviewMarkdown(
