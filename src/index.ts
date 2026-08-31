@@ -5,6 +5,7 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
 import { KernelClient } from "./kernel-client";
+import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -67,6 +68,7 @@ const EMBED_RESET_CSS = `
 
 class DropImporterPlugin extends Plugin {
   private readonly api = new KernelClient();
+  private readonly documents = new DocumentCreator(this.api);
   private dragDepth = 0;
   private overlay: HTMLDivElement | null = null;
   private toastTimer: number | null = null;
@@ -237,18 +239,6 @@ class DropImporterPlugin extends Plugin {
     else rootItems.prepend(createItem);
   }
 
-  private async resolveNotebookId(
-    type: "doc" | "notebook",
-    targetId: string
-  ): Promise<string> {
-    if (type === "notebook") return targetId;
-    const pathData = await this.postJson<DocumentPathData>(
-      "/api/filetree/getPathByID",
-      { id: targetId }
-    );
-    return pathData.notebook;
-  }
-
   private async createNewMindMap(
     type: "doc" | "notebook",
     targetId: string
@@ -265,8 +255,8 @@ class DropImporterPlugin extends Plugin {
       // a fresh backing file, but keep the user-facing document title stable.
       asset.originalName = "新建脑图.mm";
       asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(asset, xml);
-      const notebook = await this.resolveNotebookId(type, targetId);
-      await this.createRootDocuments(notebook, [asset]);
+      const notebook = await this.documents.resolveNotebookId(type, targetId);
+      await this.documents.createRootDocuments(notebook, [asset]);
       this.showToast("脑图已创建");
       await this.recordDebug("mindmap-created", { type, targetId, asset });
     } catch (error) {
@@ -286,8 +276,8 @@ class DropImporterPlugin extends Plugin {
   ): Promise<void> {
     this.showToast("正在创建 Word 文档…");
     try {
-      const notebook = await this.resolveNotebookId(type, targetId);
-      const path = await this.findAvailableChildPath(
+      const notebook = await this.documents.resolveNotebookId(type, targetId);
+      const path = await this.documents.findAvailableChildPath(
         notebook,
         "/",
         "新建 Word 文档"
@@ -333,8 +323,8 @@ class DropImporterPlugin extends Plugin {
       );
       asset.originalName = "新建 Excel 工作簿.xlsx";
       asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
-      const notebook = await this.resolveNotebookId(type, targetId);
-      await this.createRootDocuments(notebook, [asset]);
+      const notebook = await this.documents.resolveNotebookId(type, targetId);
+      await this.documents.createRootDocuments(notebook, [asset]);
       this.showToast("Excel 工作簿已创建");
       await this.recordDebug("spreadsheet-created", { type, targetId, asset });
     } catch (error) {
@@ -525,11 +515,11 @@ class DropImporterPlugin extends Plugin {
 
     try {
       if (dropTarget.position === "create-child-documents") {
-        await this.createChildDocuments(dropTarget.id, uploaded);
+        await this.documents.createChildDocuments(dropTarget.id, uploaded);
       } else if (dropTarget.position === "create-root-documents") {
-        await this.createRootDocuments(dropTarget.id, uploaded);
+        await this.documents.createRootDocuments(dropTarget.id, uploaded);
       } else {
-        await this.insertAttachmentBlock(dropTarget, uploaded);
+        await this.documents.insertAttachmentBlock(dropTarget, uploaded);
       }
     } catch (error) {
       console.error("[Drop Importer] Attachment insertion failed", error);
@@ -546,93 +536,6 @@ class DropImporterPlugin extends Plugin {
       failedCount > 0
     );
     await this.recordDebug("import-complete", { uploaded, failedCount });
-  }
-
-  private async insertAttachmentBlock(
-    target: DropTarget,
-    assets: UploadedAsset[]
-  ): Promise<void> {
-    const markdown = this.buildAttachmentMarkdown(assets);
-    await this.api.postJson<unknown>("/api/block/insertBlock", {
-        dataType: "markdown",
-        data: markdown,
-        previousID: target.id
-      });
-  }
-
-  private async createChildDocuments(
-    parentDocumentId: string,
-    assets: UploadedAsset[]
-  ): Promise<void> {
-    const [pathData, parentHPath] = await Promise.all([
-      this.postJson<DocumentPathData>("/api/filetree/getPathByID", {
-        id: parentDocumentId
-      }),
-      this.postJson<string>("/api/filetree/getHPathByID", {
-        id: parentDocumentId
-      })
-    ]);
-
-    for (const asset of assets) {
-      const childPath = await this.findAvailableChildPath(
-        pathData.notebook,
-        parentHPath,
-        asset.originalName
-      );
-      await this.postJson<string>("/api/filetree/createDocWithMd", {
-        notebook: pathData.notebook,
-        path: childPath,
-        markdown: asset.documentMarkdown?.trim()
-          ? asset.documentMarkdown
-          : this.buildAttachmentMarkdown([asset])
-      });
-    }
-  }
-
-  private async createRootDocuments(
-    notebook: string,
-    assets: UploadedAsset[]
-  ): Promise<void> {
-    for (const asset of assets) {
-      const path = await this.findAvailableChildPath(
-        notebook,
-        "/",
-        asset.originalName
-      );
-      await this.postJson<string>("/api/filetree/createDocWithMd", {
-        notebook,
-        path,
-        markdown: asset.documentMarkdown?.trim()
-          ? asset.documentMarkdown
-          : this.buildAttachmentMarkdown([asset])
-      });
-    }
-  }
-
-  private async findAvailableChildPath(
-    notebook: string,
-    parentHPath: string,
-    fileName: string
-  ): Promise<string> {
-    const dotIndex = fileName.lastIndexOf(".");
-    const stem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
-    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : "";
-    const parent = parentHPath === "/" ? "" : parentHPath.replace(/\/$/, "");
-
-    for (let index = 1; index <= 100; index += 1) {
-      const title =
-        index === 1 ? fileName : `${stem} (${index})${extension}`;
-      const path = `${parent}/${title}`;
-      const ids = await this.postJson<string[]>("/api/filetree/getIDsByHPath", {
-        notebook,
-        path
-      });
-      if (!ids || ids.length === 0) {
-        return path;
-      }
-    }
-
-    throw new Error("Unable to find an unused child document name");
   }
 
   private async postJson<T>(endpoint: string, body: unknown): Promise<T> {
@@ -711,16 +614,6 @@ class DropImporterPlugin extends Plugin {
     }
   }
 
-  private buildAttachmentMarkdown(assets: UploadedAsset[]): string {
-    return assets
-      .map(({ originalName, assetPath }) => {
-        const label = this.escapeMarkdownLabel(originalName);
-        const destination = assetPath.replace(/</g, "%3C").replace(/>/g, "%3E");
-        return `[${label}](<${destination}>)`;
-      })
-      .join("  \n");
-  }
-
   private async buildFreeMindPreviewMarkdown(
     asset: UploadedAsset,
     xml: string
@@ -757,7 +650,7 @@ class DropImporterPlugin extends Plugin {
       if (!xmlEntry) throw new Error("XMind content.json/content.xml not found");
       outline = this.convertXMindXml(await xmlEntry.async("string"));
     }
-    const attachment = this.buildAttachmentMarkdown([asset]);
+    const attachment = buildAttachmentMarkdown([asset]);
     return `${outline.trim() || "该 XMind 文件没有可显示的主题。"}\n\n---\n\n### 附件\n\n📎 ${attachment}`;
   }
 
@@ -862,7 +755,7 @@ class DropImporterPlugin extends Plugin {
       markdown = markdown.replace(`SIYUANWORDTABLE${index}END`, table);
     });
     markdown = markdown.replace(/\n{3,}/g, "\n\n").trim();
-    const attachment = this.buildAttachmentMarkdown([asset]);
+    const attachment = buildAttachmentMarkdown([asset]);
     const warning = result.messages.length > 0
       ? `\n\n> Word 转换提示：${result.messages.length} 项复杂格式未完全还原，请通过附件查看原版。`
       : "";
@@ -931,7 +824,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   private buildPdfPreviewMarkdown(asset: UploadedAsset): string {
-    const attachment = this.buildAttachmentMarkdown([asset]);
+    const attachment = buildAttachmentMarkdown([asset]);
     const source = `/${asset.assetPath}`;
     const escapedSource = this.escapeHtmlAttribute(source);
     return `<iframe src="${escapedSource}" data-src="${escapedSource}" style="${EMBED_STYLE} height: 78vh; min-height: 640px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${attachment}`;

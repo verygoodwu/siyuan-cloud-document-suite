@@ -296,13 +296,14 @@ test("an external asset update triggers conflict protection and keeps recovery",
 });
 
 test("editor sources keep automatic save and readable borderless layouts", async () => {
-  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript] = await Promise.all([
+  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript, documentCreatorSource] = await Promise.all([
     readFile(new URL("../static/sheet-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/sheet-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
-    readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8")
+    readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8")
   ]);
 
   assert.doesNotMatch(sheetHtml, /id="save"/);
@@ -411,8 +412,8 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(pluginSource, /promoteCreateFileMenu/);
   assert.match(pluginSource, /rootItems\.insertBefore\(createItem, replaceItem\.nextElementSibling\)/);
   assert.match(pluginSource, /separatorBeforeClose/);
-  assert.match(pluginSource, /private async resolveNotebookId/);
-  assert.match(pluginSource, /await this\.createRootDocuments\(notebook, \[asset\]\)/);
+  assert.match(documentCreatorSource, /async resolveNotebookId/);
+  assert.match(pluginSource, /this\.documents\.createRootDocuments\(notebook, \[asset\]\)/);
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.match(sheetScript, /grid\.addEventListener\("paste"/);
   assert.match(sheetScript, /grid\.addEventListener\("copy"/);
