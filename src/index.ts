@@ -6,6 +6,7 @@ import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
 import { KernelClient } from "./kernel-client";
 import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
+import { PreviewBuilders } from "./preview-builders";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -69,6 +70,7 @@ const EMBED_RESET_CSS = `
 class DropImporterPlugin extends Plugin {
   private readonly api = new KernelClient();
   private readonly documents = new DocumentCreator(this.api);
+  private readonly previews = new PreviewBuilders(PLUGIN_VERSION, MM_EDITOR_CACHE_VERSION);
   private dragDepth = 0;
   private overlay: HTMLDivElement | null = null;
   private toastTimer: number | null = null;
@@ -254,7 +256,7 @@ class DropImporterPlugin extends Plugin {
       // The kernel keeps assets after their document is deleted. Always upload
       // a fresh backing file, but keep the user-facing document title stable.
       asset.originalName = "新建脑图.mm";
-      asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(asset, xml);
+      asset.documentMarkdown = this.previews.buildFreeMind(asset, xml);
       const notebook = await this.documents.resolveNotebookId(type, targetId);
       await this.documents.createRootDocuments(notebook, [asset]);
       this.showToast("脑图已创建");
@@ -322,7 +324,7 @@ class DropImporterPlugin extends Plugin {
         })
       );
       asset.originalName = "新建 Excel 工作簿.xlsx";
-      asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
+      asset.documentMarkdown = this.previews.buildSpreadsheet(asset);
       const notebook = await this.documents.resolveNotebookId(type, targetId);
       await this.documents.createRootDocuments(notebook, [asset]);
       this.showToast("Excel 工作簿已创建");
@@ -468,24 +470,24 @@ class DropImporterPlugin extends Plugin {
           } else if (/\.xmd$/i.test(file.name)) {
             const content = await file.arrayBuffer();
             asset.documentMarkdown = isZipContent(content)
-              ? await this.buildXMindPreviewMarkdown(asset, content)
+              ? await this.previews.buildXMind(asset, content)
               : new TextDecoder().decode(content);
           } else if (isPdfFile(file.name)) {
-            asset.documentMarkdown = this.buildPdfPreviewMarkdown(asset);
+            asset.documentMarkdown = this.previews.buildPdf(asset);
           } else if (isSpreadsheetFile(file.name)) {
-            asset.documentMarkdown = this.buildSpreadsheetPreviewMarkdown(asset);
+            asset.documentMarkdown = this.previews.buildSpreadsheet(asset);
           } else if (isWordFile(file.name)) {
-            asset.documentMarkdown = await this.buildWordPreviewMarkdown(
+            asset.documentMarkdown = await this.previews.buildWord(
               asset,
               await file.arrayBuffer()
             );
           } else if (isXMindFile(file.name)) {
-            asset.documentMarkdown = await this.buildXMindPreviewMarkdown(
+            asset.documentMarkdown = await this.previews.buildXMind(
               asset,
               await file.arrayBuffer()
             );
           } else if (isFreeMindFile(file.name)) {
-            asset.documentMarkdown = await this.buildFreeMindPreviewMarkdown(
+            asset.documentMarkdown = this.previews.buildFreeMind(
               asset,
               await file.text()
             );
