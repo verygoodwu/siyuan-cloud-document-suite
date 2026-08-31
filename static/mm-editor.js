@@ -580,6 +580,19 @@ function collectSubConnections(wrapper, connections) {
   }
 }
 
+function ensureBranchPaths(svg, requiredCount) {
+  const paths = Array.from(svg.querySelectorAll(":scope > path"));
+  while (paths.length < requiredCount) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "#5d85ff");
+    path.setAttribute("stroke-width", "2");
+    svg.appendChild(path);
+    paths.push(path);
+  }
+  return paths;
+}
+
 function alignVisibleHierarchy() {
   const childrenGroups = Array.from(document.querySelectorAll("me-children"));
   for (const children of childrenGroups) children.style.removeProperty("transform");
@@ -623,9 +636,9 @@ function redrawVisibleBranches() {
   alignVisibleHierarchy();
   const rootTopic = document.querySelector("me-root > me-tpc");
   const mainSvg = document.querySelector("svg.lines");
-  const mainPaths = mainSvg ? Array.from(mainSvg.querySelectorAll("path")) : [];
   const mainWrappers = Array.from(document.querySelectorAll("me-main > me-wrapper"));
   if (rootTopic && mainSvg) {
+    const mainPaths = ensureBranchPaths(mainSvg, mainWrappers.length);
     const rootRect = rootTopic.getBoundingClientRect();
     mainWrappers.forEach((wrapper, index) => {
       const topic = wrapper.querySelector(":scope > me-parent > me-tpc");
@@ -638,9 +651,9 @@ function redrawVisibleBranches() {
   for (const wrapper of mainWrappers) {
     const svg = wrapper.querySelector(":scope > svg.subLines");
     if (!svg) continue;
-    const paths = Array.from(svg.querySelectorAll("path"));
     const connections = [];
     collectSubConnections(wrapper, connections);
+    const paths = ensureBranchPaths(svg, connections.length);
     const left = wrapper.parentElement?.classList.contains("lhs") === true;
     connections.forEach(({ parentTopic, childTopic }, index) => {
       const path = paths[index];
@@ -679,7 +692,7 @@ function redrawVisibleBranches() {
       ));
       if (matchIndex < 0) continue;
       const { parentTopic } = connections[matchIndex];
-      const path = svg.querySelectorAll("path")[matchIndex];
+      const path = ensureBranchPaths(svg, connections.length)[matchIndex];
       const left = wrapper.parentElement?.classList.contains("lhs") === true;
       if (path && parentTopic) {
         path.setAttribute("d", branchPathFromRects(
