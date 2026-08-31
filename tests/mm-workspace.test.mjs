@@ -127,3 +127,22 @@ test("mind workspace helpers stay responsive with more than one thousand nodes",
   assert.ok(outline.length > 0);
   assert.ok(elapsed < 500, `large mind workspace helpers took ${elapsed.toFixed(1)} ms`);
 });
+
+test("mind workspace helpers remain bounded at a larger practical limit", () => {
+  let sequence = 0;
+  const makeTree = (depth, width) => {
+    const node = { id: `limit-${sequence++}`, topic: `节点 ${sequence}`, children: [] };
+    if (depth > 0) for (let index = 0; index < width; index += 1) node.children.push(makeTree(depth - 1, width));
+    return node;
+  };
+  const mind = makeTree(6, 4);
+  const startedAt = performance.now();
+  const rows = flattenMindNodes(mind);
+  const matches = searchMindNodes(mind, "节点");
+  const outline = buildOutlineRows(mind, "节点 4000");
+  const elapsed = performance.now() - startedAt;
+  assert.equal(rows.length, 5461);
+  assert.equal(matches.length, rows.length);
+  assert.ok(outline.length > 0);
+  assert.ok(elapsed < 1000, `large mind workspace helpers took ${elapsed.toFixed(1)} ms`);
+});

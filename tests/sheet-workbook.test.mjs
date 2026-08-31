@@ -532,3 +532,41 @@ test("non-xlsx assets are rejected before an incompatible write", () => {
     );
   }
 });
+
+test("lightweight workbook limit accepts exactly 500 by 50", () => {
+  const workbook = XLSX.utils.book_new();
+  const rows = Array.from({ length: 500 }, (_, row) =>
+    Array.from({ length: 50 }, (_, col) => `${row}:${col}`)
+  );
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Limit");
+  const result = analyzeWorkbookCapabilities(XLSX, workbook);
+  assert.equal(result.safeToEdit, true);
+  assert.equal(result.maxRows, 500);
+  assert.equal(result.maxCols, 50);
+  assert.equal(result.warnings.length, 0);
+});
+
+test("one row or column beyond the limit is rejected independently", () => {
+  for (const [rows, cols, warning] of [[501, 50, "行数"], [500, 51, "列数"]]) {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(
+      Array.from({ length: rows }, () => Array(cols).fill("x"))
+    ), "Limit");
+    const result = analyzeWorkbookCapabilities(XLSX, workbook);
+    assert.equal(result.safeToEdit, false);
+    assert.ok(result.warnings.some((item) => item.includes(warning)));
+  }
+});
+
+test("serializing the full lightweight boundary stays within the performance budget", () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(
+    Array.from({ length: 500 }, (_, row) => Array.from({ length: 50 }, (_, col) => row * 50 + col))
+  ), "Limit");
+  const model = parseWorkbookModel(XLSX, new Uint8Array(XLSX.write(workbook, { type: "array", bookType: "xlsx" })), "/assets/limit.xlsx");
+  const startedAt = performance.now();
+  const bytes = serializeWorkbookModel(XLSX, model);
+  const elapsed = performance.now() - startedAt;
+  assert.ok(bytes.length > 0);
+  assert.ok(elapsed < 1000, `boundary serialization took ${elapsed.toFixed(1)} ms`);
+});
