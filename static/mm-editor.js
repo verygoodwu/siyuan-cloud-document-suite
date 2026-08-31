@@ -362,6 +362,7 @@ function selectAndCenterMindNode(mind, nodeId) {
     mind.selectNode(topic);
     decorateNodes(mind);
     centerTopicInWorkspace(mind, topic);
+    redrawVisibleBranches();
     queueWorkspaceRender(mind, true);
   }));
 }
@@ -371,6 +372,7 @@ function restoreFocusViewport(mind, nodeId, viewport) {
     const topic = findMindTopic(mind, nodeId);
     if (topic) mind.selectNode(topic);
     decorateNodes(mind);
+    redrawVisibleBranches();
     if (viewport?.transform) {
       mind.scaleVal = viewport.scaleVal;
       mind.map.style.transform = viewport.transform;
@@ -753,6 +755,7 @@ function focusMindNode(mind, nodeId) {
     mind.selectNode(topic);
     decorateNodes(mind);
     centerTopicInWorkspace(mind, topic);
+    redrawVisibleBranches();
     queueWorkspaceRender(mind, true);
   }));
 }
@@ -901,6 +904,9 @@ async function applyToolbarAction(mind, button) {
   }
   await mind.reshapeNode(topic, patch);
   decorateNodes(mind);
+  // Formatting can change the topic dimensions (especially bold text and
+  // hierarchy view padding), so keep connectors aligned with the new rects.
+  redrawVisibleBranches();
   if (action === "task") {
     topic.classList.toggle("task-done", taskDone);
     button.classList.toggle("active", taskDone);
@@ -1233,6 +1239,7 @@ try {
     else metadata.cloudViewStyle = "hierarchy";
     await mind.reshapeNode(rootTopic, { metadata });
     updateViewStyle(mind, true);
+    redrawVisibleBranches();
   });
   searchToggle.addEventListener("click", () => {
     setWorkspaceOpen(mind, true, true);
