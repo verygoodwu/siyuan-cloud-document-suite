@@ -1030,6 +1030,29 @@ function editKeyboardNode(mind, node) {
   });
 }
 
+function beginDirectMindEditing(mind, event) {
+  const topic = mind.currentNode;
+  if (!topic || event.isComposing || event.key.length !== 1) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  mind.selectNode(topic);
+  mind.editTopic(topic);
+  requestAnimationFrame(() => {
+    const input = document.querySelector("#input-box");
+    if (!input) return;
+    input.textContent = event.key;
+    input.dataset.keyboardNodeId = topic.nodeObj?.id || "";
+    input.dataset.keyboardInitialTopic = topic.nodeObj?.topic || "";
+    input.dataset.keyboardDirty = "true";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: event.key }));
+    input.focus();
+    placeCaretAtEnd(input);
+    resizeMindInputBox(input);
+    redrawVisibleBranches();
+  });
+  return true;
+}
+
 function addKeyboardChild(mind, event) {
   const target = mind.currentNode;
   if (!target) return;
@@ -1295,6 +1318,8 @@ try {
         ? "enter"
         : undefined;
     const editingText = isTextEditingTarget(event.target);
+    const mindHasFocus = mind.container?.contains?.(document.activeElement) ||
+      mind.container?.contains?.(event.target);
     const shortcutAction = resolveMindShortcut(event, {
       editing: editingText,
       helpOpen: !shortcutDialog.hidden,
@@ -1321,7 +1346,7 @@ try {
     }
     if (
       !editingText &&
-      document.activeElement === mind.container &&
+      mindHasFocus &&
       mind.currentNode &&
       keyboardCreateKey
     ) {
@@ -1329,6 +1354,19 @@ try {
       event.stopPropagation();
       if (keyboardCreateKey === "tab") addKeyboardChild(mind, event);
       else addKeyboardRelative(mind, event);
+      return;
+    }
+    if (
+      !editingText &&
+      mindHasFocus &&
+      mind.currentNode &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.isComposing &&
+      event.key.length === 1
+    ) {
+      beginDirectMindEditing(mind, event);
       return;
     }
     if ((event.ctrlKey || event.metaKey) && key === "f") {

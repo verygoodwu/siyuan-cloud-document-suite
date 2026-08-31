@@ -493,7 +493,9 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /const visibleRoot = target\.nodeObj === mind\.nodeData/);
   assert.doesNotMatch(mindScript, /visibleRoot = !target\.nodeObj\.parent/);
   assert.match(mindScript, /const keyboardCreateKey = key === "tab" \|\| event\.code === "Tab" \|\| event\.keyCode === 9[\s\S]*\["Enter", "NumpadEnter"\]\.includes\(event\.code\)[\s\S]*event\.keyCode === 13/);
-  assert.match(mindScript, /document\.activeElement === mind\.container[\s\S]*keyboardCreateKey[\s\S]*addKeyboardChild\(mind, event\)[\s\S]*addKeyboardRelative\(mind, event\)/);
+  assert.match(mindScript, /const mindHasFocus = mind\.container\?\.contains\?\./);
+  assert.match(mindScript, /mindHasFocus[\s\S]*keyboardCreateKey[\s\S]*addKeyboardChild\(mind, event\)[\s\S]*addKeyboardRelative\(mind, event\)/);
+  assert.match(mindScript, /function beginDirectMindEditing\(mind, event\)/);
   assert.match(mindScript, /input\.dataset\.keyboardNodeId = node\.id[\s\S]*input\.dataset\.keyboardInitialTopic = node\.topic[\s\S]*input\.dataset\.keyboardDirty = "false"/);
   assert.match(mindScript, /target\.id === "input-box"[\s\S]*target\.dataset\.keyboardNodeId[\s\S]*target\.dataset\.keyboardDirty !== "true"[\s\S]*target\.blur\(\);[\s\S]*mind\.undo\(\)/);
   assert.match(mindScript, /const keyboardAddInProgress = \["addChild", "insertSibling", "insertParent"\]\.includes\(operation\?\.name\)[\s\S]*if \(keyboardAddInProgress\) \{[\s\S]*decorateNodes\(mind\);[\s\S]*return;/);
