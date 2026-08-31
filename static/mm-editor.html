@@ -10,7 +10,7 @@
     body.layout-ready #map{opacity:1}
     #map .map-container{background:#fff!important}
     #status,#help,#export,#view-style,#search-toggle,#shortcut-toggle,#focus-exit,#outline-toggle{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
-    #status{left:12px;right:auto;bottom:10px}
+    #status{left:12px;right:auto;bottom:10px}#status[data-state="working"]{color:#3478f6}#status[data-state="saved"]{color:#2f9e44}#status[data-state="error"]{color:#d97706}
     #help{left:136px;right:238px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #export,#view-style,#search-toggle,#shortcut-toggle,#focus-exit,#outline-toggle{top:10px;border:0;cursor:pointer}
     #search-toggle{left:12px;color:#3f73f1;background:#fff}

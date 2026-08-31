@@ -3,6 +3,7 @@ import test from "node:test";
 import * as XLSX from "xlsx";
 
 import {
+  analyzeWorkbookCapabilities,
   applyRecoveryPayload,
   captureCellRange,
   captureSheetState,
@@ -30,6 +31,18 @@ import {
   setRowHeight,
   validateSerializedWorkbook
 } from "../static/sheet-workbook.js";
+
+test("workbook capability analysis reports lightweight boundaries", () => {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(Array.from({ length: 501 }, () => Array(51).fill("x")));
+  XLSX.utils.book_append_sheet(workbook, sheet, "大表");
+  const result = analyzeWorkbookCapabilities(XLSX, workbook);
+  assert.equal(result.safeToEdit, false);
+  assert.equal(result.maxRows, 501);
+  assert.equal(result.maxCols, 51);
+  assert.ok(result.warnings.some((warning) => warning.includes("行数")));
+  assert.ok(result.warnings.some((warning) => warning.includes("列数")));
+});
 
 function fixtureBytes() {
   const workbook = XLSX.utils.book_new();

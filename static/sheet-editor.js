@@ -98,6 +98,8 @@ import {
   let saveAgain = false;
   let lastSaveError = "";
   let sizeWarning = "";
+  let capabilityWarning = "";
+  let capabilityBlocked = false;
   let selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
   let selectionKind = "cells";
   let draggingSelection = false;
@@ -130,6 +132,14 @@ import {
 
   const setStatus = (text) => {
     status.textContent = sizeWarning ? `${text} · ${sizeWarning}` : text;
+    const normalized = String(text);
+    status.dataset.state = normalized.includes("失败") || normalized.includes("冲突")
+      ? "error"
+      : normalized.includes("正在")
+        ? "working"
+        : normalized.includes("保存") || normalized.includes("写入")
+          ? "saved"
+          : "idle";
   };
 
   function showOperationFeedback(text, kind = "success", duration = 2200) {
@@ -1008,9 +1018,10 @@ import {
         }
       }
     }
-    sizeWarning = truncatedRows || truncatedCols
+    const rangeWarning = truncatedRows || truncatedCols
       ? `为保证性能仅显示前 ${rows} 行 × ${cols} 列，未显示区域仍会原样保留`
       : "";
+    sizeWarning = [capabilityWarning, rangeWarning].filter(Boolean).join("；");
     const head = document.createElement("thead");
     const headRow = document.createElement("tr");
     const corner = document.createElement("th");
@@ -1432,6 +1443,12 @@ import {
 
   async function setEditMode(next) {
     if (!model || modeTransition || next === editMode) return;
+    if (next && capabilityBlocked) {
+      const message = "当前工作簿超出轻量编辑范围，已保持只读预览；请先导出或缩小文件后再编辑";
+      setStatus(message);
+      showOperationFeedback(message, "warning", 4800);
+      return;
+    }
     modeTransition = true;
     modeToggle.disabled = true;
     try {
@@ -2233,6 +2250,13 @@ import {
   });
   document.addEventListener("keydown", (event) => {
     const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && event.key.toLowerCase() === "s" && model && editMode) {
+      event.preventDefault();
+      finalizeEditSession();
+      clearTimeout(saveTimer);
+      void persist(false);
+      return;
+    }
     const structureShortcut = modifier && grid.contains(document.activeElement)
       && (selectionKind === "rows" || selectionKind === "cols");
     if (editMode && structureShortcut && (event.key === "+" || (event.key === "=" && event.shiftKey))) {
@@ -2259,8 +2283,16 @@ import {
 
   load().then(({ value, state }) => {
     model = value;
+    capabilityBlocked = model.capabilities?.safeToEdit === false;
+    capabilityWarning = (model.capabilities?.warnings || [])
+      .filter((warning) => !warning.startsWith("公式"))
+      .join("；");
     if (!model.sheets.length) addWorksheet(XLSX, model, "Sheet1", false);
     render();
+    if (capabilityBlocked) {
+      modeToggle.disabled = true;
+      modeToggle.title = "超出轻量编辑范围，当前为只读预览";
+    }
     requestAnimationFrame(() => {
       const wrapper = document.querySelector(".grid-wrap");
       wrapper.scrollTop = 0;

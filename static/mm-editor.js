@@ -70,6 +70,14 @@ const zhCnMenu = {
 
 function setStatus(text) {
   status.textContent = text;
+  const normalized = String(text);
+  status.dataset.state = normalized.includes("失败") || normalized.includes("冲突")
+    ? "error"
+    : normalized.includes("正在")
+      ? "working"
+      : normalized.includes("保存") || normalized.includes("写入")
+        ? "saved"
+        : "idle";
 }
 
 function findMindTopic(mind, nodeId) {
@@ -1255,6 +1263,12 @@ try {
   });
   document.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === "s") {
+      event.preventDefault();
+      if (isTextEditingTarget(event.target)) event.target.blur?.();
+      void persistMind(false);
+      return;
+    }
     const keyboardCreateKey = key === "tab" || event.code === "Tab" || event.keyCode === 9
       ? "tab"
       : ["enter", "return"].includes(key) ||

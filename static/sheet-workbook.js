@@ -1,6 +1,38 @@
 export const SHEET_RECOVERY_SCHEMA = "siyuan-sheet-recovery-v2";
 export const MAX_RENDER_ROWS = 500;
 export const MAX_RENDER_COLS = 50;
+
+// The editor intentionally provides a lightweight XLSX surface. Keep the
+// capability decision in the model layer so the UI and tests use the same
+// rules instead of silently truncating complex workbooks.
+export function analyzeWorkbookCapabilities(XLSX, workbook) {
+  const warnings = [];
+  let maxRows = 0;
+  let maxCols = 0;
+  let formulaCount = 0;
+  let chartCount = 0;
+  for (const name of workbook?.SheetNames || []) {
+    const sheet = workbook.Sheets[name] || {};
+    const range = sheet["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]) : { e: { r: 0, c: 0 } };
+    maxRows = Math.max(maxRows, range.e.r + 1);
+    maxCols = Math.max(maxCols, range.e.c + 1);
+    formulaCount += Object.values(sheet).filter((cell) => cell && typeof cell === "object" && cell.f).length;
+    chartCount += Array.isArray(sheet["!charts"]) ? sheet["!charts"].length : 0;
+  }
+  if (maxRows > MAX_RENDER_ROWS) warnings.push(`行数超过轻量编辑范围（${MAX_RENDER_ROWS} 行）`);
+  if (maxCols > MAX_RENDER_COLS) warnings.push(`列数超过轻量编辑范围（${MAX_RENDER_COLS} 列）`);
+  if (formulaCount > 0) warnings.push("公式仅保证常用轻量函数");
+  if (chartCount > 0) warnings.push("复杂图表不保证完整往返编辑");
+  return {
+    sheetCount: workbook?.SheetNames?.length || 0,
+    maxRows,
+    maxCols,
+    formulaCount,
+    chartCount,
+    warnings,
+    safeToEdit: maxRows <= MAX_RENDER_ROWS && maxCols <= MAX_RENDER_COLS
+  };
+}
 const SUITE_STATE_PROPERTY = "SiyuanCloudSheetState";
 
 function safeTitleFromAsset(asset) {
@@ -396,11 +428,13 @@ export function parseWorkbookModel(XLSX, bytes, asset) {
     sheetStubs: true,
     bookVBA: true
   });
+  const capabilities = analyzeWorkbookCapabilities(XLSX, workbook);
   const suiteState = readSuiteState(workbook);
   const model = {
     title: safeTitleFromAsset(asset),
     workbook,
     sheets: workbook.SheetNames.map((name) => sheetView(XLSX, name, workbook.Sheets[name], suiteState[name])),
+    capabilities,
     operations: []
   };
   recalculateWorkbookFormulas(XLSX, model);

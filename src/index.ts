@@ -497,10 +497,11 @@ class DropImporterPlugin extends Plugin {
 
   private async importFiles(files: File[], dropTarget: DropTarget): Promise<void> {
     await this.recordDebug("import-start", { fileNames: files.map((file) => file.name), dropTarget });
-    this.showToast(`正在导入 ${files.length} 个文件…`);
+    this.showToast(`正在导入 0/${files.length} 个文件…`);
     const uploaded: UploadedAsset[] = [];
 
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
+      this.showToast(`正在导入 ${index + 1}/${files.length}：${file.name}…`);
       try {
         const asset = await this.uploadAsset(file);
         try {
@@ -541,6 +542,10 @@ class DropImporterPlugin extends Plugin {
         uploaded.push(asset);
       } catch (error) {
         console.error("[Drop Importer] Asset upload failed", error);
+        await this.recordDebug("import-file-failed", {
+          fileName: file.name,
+          reason: String(error)
+        });
       }
     }
 
