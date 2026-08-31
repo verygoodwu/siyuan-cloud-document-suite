@@ -1011,6 +1011,13 @@ function editKeyboardNode(mind, node) {
       input.dataset.keyboardInitialTopic = node.topic;
       input.dataset.keyboardDirty = "false";
       input.focus();
+      // MindElixir positions the temporary editor after the node layout pass.
+      // Recalculate branches once it is mounted so Tab-created nodes do not
+      // appear offset from their connector while the user is typing.
+      requestAnimationFrame(() => {
+        resizeMindInputBox(input);
+        redrawVisibleBranches();
+      });
     }
     updateToolbar(mind);
     queueWorkspaceRender(mind, true);
@@ -1193,6 +1200,10 @@ try {
     scheduleMindPersistence();
     if (keyboardAddInProgress) {
       decorateNodes(mind);
+      // The fast keyboard path intentionally skips a full refresh; it still
+      // needs an immediate branch/layout redraw after MindElixir inserts the
+      // new node, otherwise the connector remains at the previous position.
+      redrawVisibleBranches();
       queueWorkspaceRender(mind, true);
       return;
     }
