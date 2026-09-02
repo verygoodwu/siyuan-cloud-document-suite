@@ -1,10 +1,15 @@
 # Cloud Document Suite
 
-Import, preview, create, edit, and export office documents and mind maps in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Excel and FreeMind edits are written back to SiYuan assets and update a document sync revision marker; local browser storage is used only for recovery.
+Import, preview, create, edit, and export office documents, mind maps, and whiteboards in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Excel, FreeMind, and whiteboard edits are written back to SiYuan assets and update a document sync revision marker; local browser storage is used only for recovery.
 
 ![Feature preview](preview.png)
 
 ## Changelog (short version)
+
+- **v2.1.3**: First public whiteboard release, including all capabilities developed in v2.1.0–v2.1.2. Splits the text editor into a centered overlay and native editable inner element, fixing unreliable empty-node input, alignment, and duplicate double-click initialization. The whiteboard is isolated from existing spreadsheet, mind-map, Word, and import flows, with real-browser input and persistence coverage.
+- **v2.1.2 (local development)**: Completes whiteboard text-entry behavior for immediate editing after creation, double-click, Enter/F2, and direct typing; fixes creation/edit timing and PNG export for boards containing text; and adds a full whiteboard test matrix. This build has not been pushed or submitted to the marketplace.
+- **v2.1.1 (local development)**: Fixes vertically misaligned whiteboard text editing and repeated clicks or double-clicks being misclassified as blank-canvas creation. Adds real-browser regression coverage.
+- **v2.1.0 (local development)**: Adds a Feishu-inspired editable whiteboard with an infinite canvas, text, sticky notes, common shapes, connectors, freehand drawing, images, marquee selection, alignment and distribution, grouping, sections, layer ordering, built-in templates, automatic layout, undo/redo, automatic SiYuan persistence, recovery, conflict protection, and SVG/PNG export.
 
 - **v1.9.2**: Restores each branch's original collapse state after search, coalesces mind-map render/decorate work for smoother large maps, makes Tab/Enter/Shift+Enter/Ctrl+Enter create-and-edit shortcuts consistently undoable, and lets Escape leave branch focus while restoring the previous viewport.
 - **v1.9.1**: Adds a searchable mind-map outline with canvas selection linking, direct editing after Tab, reliable keyboard undo, discoverable shortcut help, Ctrl+/ branch toggling, Ctrl+Home root navigation, safe branch focus with an always-visible exit, and steadier Chinese long-text input.
@@ -32,7 +37,7 @@ Import, preview, create, edit, and export office documents and mind maps in SiYu
 
 ## Next
 
-Development currently focuses on a lightweight, responsive spreadsheet experience inside SiYuan: common input, row/column operations, editing ergonomics, reliable automatic saving, and safe export. Complex Excel compatibility and Web Worker adoption are intentionally deferred.
+Development focuses on lightweight editing experiences inside SiYuan. The next whiteboard steps are box selection, multi-object layout, sections, and templates; complex Excel compatibility remains intentionally deferred.
 
 ## Features
 
@@ -42,7 +47,8 @@ Development currently focuses on a lightweight, responsive spreadsheet experienc
 - `.docx` content conversion with the original attachment retained, plus a context-menu action for creating Word documents.
 - XMind import for both modern `content.json` and legacy `content.xml` packages.
 - Live FreeMind/Freeplane `.mm` editing with draggable nodes, automatic SiYuan asset persistence, and standards-compatible `.mm` export.
-- Context-menu actions on documents and notebooks for creating mind maps, Word documents, and Excel workbooks.
+- Editable whiteboards with text, sticky notes, shapes, images, freehand drawing, node-bound connectors, zoom/pan, quick creation, undo/redo, automatic SiYuan persistence, and SVG/PNG export.
+- Context-menu actions on documents and notebooks for creating whiteboards, mind maps, Word documents, and Excel workbooks.
 - Collision-safe naming and sequential multi-file imports; one failed file does not stop the remaining queue.
 
 Legacy `.doc` files and web-link previews are not supported yet.

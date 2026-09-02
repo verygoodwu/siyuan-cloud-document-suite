@@ -1,0 +1,37 @@
+<!doctype html><html><body><pre id="result">running</pre><script type="module">
+import { buildWhiteboardSvg } from "/plugins/siyuan-cloud-document-suite/whiteboard-renderer.js?v=full";
+import { createWhiteboardDocument, createWhiteboardNode, frameWhiteboardNodes } from "/plugins/siyuan-cloud-document-suite/whiteboard-model.js?v=full";
+import { instantiateWhiteboardTemplate } from "/plugins/siyuan-cloud-document-suite/whiteboard-templates.js?v=full";
+const board = createWhiteboardDocument("导出诊断");
+board.nodes.push(...instantiateWhiteboardTemplate("flow", { x: 0, y: 0 }));
+board.nodes.push(...instantiateWhiteboardTemplate("brainstorm", { x: 0, y: 300 }));
+board.nodes.push(...instantiateWhiteboardTemplate("plan", { x: 0, y: 700 }));
+board.nodes.push(createWhiteboardNode("freehand", { points: [{ x: 20, y: 1100 }, { x: 80, y: 1140 }, { x: 150, y: 1110 }] }));
+board.nodes.push(createWhiteboardNode("image", { x: 900, y: 0, width: 80, height: 80, src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCI+PHJlY3Qgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiBmaWxsPSJibHVlIi8+PC9zdmc+' }));
+frameWhiteboardNodes(board, board.nodes.filter((node) => node.type === "rect").slice(0, 2).map((node) => node.id), "测试分区");
+const decode = (value) => new Promise((resolve) => {
+  const image = new Image();
+  const url = URL.createObjectURL(new Blob([buildWhiteboardSvg(value)], { type: "image/svg+xml;charset=utf-8" }));
+  image.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.min(2048, image.width));
+      canvas.height = Math.max(1, Math.min(2048, image.height));
+      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => { URL.revokeObjectURL(url); resolve(Boolean(blob)); }, "image/png");
+    } catch {
+      URL.revokeObjectURL(url);
+      resolve(false);
+    }
+  };
+  image.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+  image.src = url;
+});
+const results = { full: await decode(board) };
+for (const type of [...new Set(board.nodes.map((node) => node.type))]) {
+  results[`without-${type}`] = await decode({ ...board, nodes: board.nodes.filter((node) => node.type !== type) });
+  results[`only-${type}`] = await decode({ ...board, nodes: board.nodes.filter((node) => node.type === type) });
+}
+document.querySelector("#result").textContent = JSON.stringify(results);
+await fetch("/full-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "export-diagnostic", results }) });
+</script></body></html>

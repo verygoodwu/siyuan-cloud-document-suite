@@ -27,7 +27,7 @@ export class EmbedManager {
       if (!raw) continue;
       let url: URL;
       try { url = new URL(raw, window.location.href); } catch { continue; }
-      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet)-editor\.html$/i.test(url.pathname)) continue;
+      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet|whiteboard)-editor\.html$/i.test(url.pathname)) continue;
       const version = /\/mm-editor\.html$/i.test(url.pathname) ? this.mmVersion : this.pluginVersion;
       if (url.searchParams.get("v") === version) continue;
       url.searchParams.set("v", version);

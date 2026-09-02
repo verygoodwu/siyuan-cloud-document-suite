@@ -31,7 +31,7 @@ const BLOCK_SELECTOR = "[data-node-id]";
 const TREE_DOCUMENT_SELECTOR = ".b3-list-item[data-node-id]";
 const FILE_TREE_SELECTOR = ".sy__file";
 const CLOUD_DOCUMENT_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/"], [data-src*="/plugins/siyuan-cloud-document-suite/"])';
-const CLOUD_DOCUMENT_EDITOR_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"])';
+const CLOUD_DOCUMENT_EDITOR_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"])';
 const EMBED_STYLE = "width: 100%; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: transparent; display: block;";
 const EMBED_RESET_CSS = `
 .protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}),
@@ -181,6 +181,14 @@ class DropImporterPlugin extends Plugin {
       label: "创建文件",
       submenu: [
         {
+          id: "cloud-document-create-whiteboard",
+          icon: "iconEdit",
+          label: "新建白板",
+          click: async () => {
+            await this.createNewWhiteboard(type, target.id);
+          }
+        },
+        {
           id: "cloud-document-create-mindmap",
           icon: "iconGraph",
           label: "新建脑图（.mm）",
@@ -216,6 +224,46 @@ class DropImporterPlugin extends Plugin {
     });
     this.scheduleCreateFileMenuPromotion();
   };
+
+  private async createNewWhiteboard(
+    type: "doc" | "notebook",
+    targetId: string
+  ): Promise<void> {
+    this.showToast("正在创建白板…");
+    try {
+      const now = new Date().toISOString();
+      const documentValue = {
+        schema: "siyuan-cloud-whiteboard",
+        version: 1,
+        title: "新建白板",
+        createdAt: now,
+        updatedAt: now,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: []
+      };
+      const asset = await this.api.uploadAsset(
+        new File(
+          [`${JSON.stringify(documentValue, null, 2)}\n`],
+          buildUniqueUploadName("新建白板.board.json"),
+          { type: "application/json" }
+        )
+      );
+      asset.originalName = "新建白板";
+      asset.documentMarkdown = this.previews.buildWhiteboard(asset);
+      const notebook = await this.documents.resolveNotebookId(type, targetId);
+      await this.documents.createRootDocuments(notebook, [asset]);
+      this.showToast("白板已创建");
+      await this.recordDebug("whiteboard-created", { type, targetId, asset });
+    } catch (error) {
+      console.error("[Drop Importer] Cannot create whiteboard", error);
+      this.showToast("白板创建失败，请查看诊断信息", true);
+      await this.recordDebug("whiteboard-create-failed", {
+        type,
+        targetId,
+        reason: String(error)
+      });
+    }
+  }
 
   private scheduleCreateFileMenuPromotion(): void {
     for (const delay of [0, 16, 50]) {
@@ -552,7 +600,7 @@ class DropImporterPlugin extends Plugin {
       } catch {
         continue;
       }
-      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet)-editor\.html$/i.test(url.pathname)) continue;
+      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet|whiteboard)-editor\.html$/i.test(url.pathname)) continue;
       const editorVersion = /\/mm-editor\.html$/i.test(url.pathname)
         ? MM_EDITOR_CACHE_VERSION
         : PLUGIN_VERSION;

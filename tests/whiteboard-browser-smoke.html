@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Whiteboard smoke</title></head>
+<body data-result="running"><pre id="result">running</pre><iframe id="editor" style="width:1200px;height:720px" src="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=smoke&amp;asset=%2Fassets%2Ftest.board.json"></iframe>
+<script type="module">
+  const output = document.querySelector("#result");
+  const frame = document.querySelector("#editor");
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  try {
+    await new Promise((resolve, reject) => {
+      frame.addEventListener("load", resolve, { once: true });
+      setTimeout(() => reject(new Error("editor load timeout")), 5000);
+    });
+    await wait(300);
+    const doc = frame.contentDocument;
+    assert(doc?.querySelector("#template-button"), "template button missing");
+    const shell = doc.querySelector("#canvas-shell");
+    shell.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: 600, clientY: 360 }));
+    assert(doc.querySelectorAll("#node-layer [data-node-id]").length === 0, "blank double click unexpectedly created a node");
+    doc.querySelector('[data-tool="rect"]').click();
+    shell.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 31, button: 0, clientX: 600, clientY: 360 }));
+    const created = doc.querySelector("#node-layer [data-node-id]");
+    assert(created, "shape tool did not create a node");
+    const createdId = created.dataset.nodeId;
+    const countAfterCreate = doc.querySelectorAll("#node-layer [data-node-id]").length;
+    created.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: 600, clientY: 360 }));
+    created.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: 600, clientY: 360 }));
+    assert(doc.querySelectorAll("#node-layer [data-node-id]").length === countAfterCreate, "repeated node clicks created duplicates");
+    const textEditor = doc.querySelector("#text-editor");
+    const textEditorInput = doc.querySelector("#text-editor-input");
+    assert(!textEditor.hidden, "double click did not enter text editing");
+    assert(getComputedStyle(textEditor).alignItems === "center", "text editor is not vertically centered");
+    assert(doc.activeElement === textEditorInput, "text editor did not receive focus");
+    textEditorInput.textContent = "";
+    assert(doc.execCommand("insertText", false, "冒烟输入"), "browser text insertion failed");
+    textEditorInput.blur();
+    await wait(30);
+    assert(doc.querySelector(`[data-node-id="${createdId}"] .whiteboard-node-text`).textContent === "冒烟输入", "typed text was not committed");
+    doc.querySelector("#template-button").click();
+    assert(doc.querySelector("#template-dialog").open, "template dialog did not open");
+    doc.querySelector('[data-template="flow"]').click();
+    await wait(150);
+    assert(doc.querySelectorAll("#node-layer [data-node-id]").length >= 7, "template nodes were not rendered");
+    const arrange = doc.querySelector("#arrange-action");
+    arrange.value = "auto-grid";
+    arrange.dispatchEvent(new Event("change", { bubbles: true }));
+    doc.querySelector("#group").click();
+    await wait(50);
+    doc.querySelector("#ungroup").click();
+    await wait(50);
+    doc.querySelector("#group").click();
+    doc.querySelector("#create-frame").click();
+    await wait(1100);
+    assert(doc.querySelector("#node-layer .whiteboard-frame"), "frame was not rendered");
+    const saved = await fetch("/assets/test.board.json", { cache: "no-store" }).then((response) => response.json());
+    const whiteboardFrame = saved.nodes.find((node) => node.type === "frame");
+    assert(whiteboardFrame?.childIds?.length >= 4, "frame children were not saved");
+    assert(saved.nodes.filter((node) => node.groupId).length >= 4, "group relationships were not saved");
+    assert(saved.nodes.every((node) => Number.isFinite(node.x) || node.type === "connector"), "layout produced invalid geometry");
+    frame.src = frame.src + "&reload=1";
+    await new Promise((resolve) => frame.addEventListener("load", resolve, { once: true }));
+    await wait(300);
+    assert(frame.contentDocument.querySelector("#node-layer .whiteboard-frame"), "saved frame did not survive reload");
+    document.body.dataset.result = "passed";
+    output.textContent = "WHITEBOARD_BROWSER_SMOKE_PASSED";
+    await fetch("/smoke-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "passed", checks: ["blank-double-click", "repeat-node-click", "vertical-center", "real-text-input", "template", "layout", "group", "frame", "save-reload"] }) });
+  } catch (error) {
+    document.body.dataset.result = "failed";
+    output.textContent = `WHITEBOARD_BROWSER_SMOKE_FAILED: ${error.stack || error}`;
+    await fetch("/smoke-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "failed", error: String(error.stack || error) }) });
+  }
+</script></body></html>

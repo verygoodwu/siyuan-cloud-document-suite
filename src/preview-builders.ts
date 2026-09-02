@@ -53,6 +53,11 @@ export class PreviewBuilders {
     return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
+  buildWhiteboard(asset: UploadedAsset): string {
+    const url = `/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=${encodeURIComponent(this.pluginVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
+  }
+
   buildPdf(asset: UploadedAsset): string {
     const source = escapeHtml(`/${asset.assetPath}`);
     return `<iframe src="${source}" data-src="${source}" style="${EMBED_STYLE} height: 78vh; min-height: 640px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${buildAttachmentMarkdown([asset])}`;
