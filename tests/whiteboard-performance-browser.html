@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Whiteboard 2000-node performance test</title></head>
+<body><pre id="result">seeding 2,000 nodes</pre><iframe id="editor" style="width:1280px;height:760px"></iframe>
+<script type="module">
+const output = document.querySelector("#result");
+const frame = document.querySelector("#editor");
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const pointer = (type, target, options = {}) => target.dispatchEvent(new PointerEvent(type, {
+  bubbles: true, cancelable: true, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 712, ...options
+}));
+const nextFrame = () => new Promise((resolve) => requestAnimationFrame((time) => resolve(time)));
+
+function frameMetrics(samples) {
+  const intervals = samples.slice(1).map((value, index) => value - samples[index]).sort((a, b) => a - b);
+  const duration = Math.max(1, samples.at(-1) - samples[0]);
+  return {
+    frames: samples.length,
+    durationMs: Math.round(duration * 100) / 100,
+    averageFps: Math.round(((samples.length - 1) * 1000 / duration) * 10) / 10,
+    p95FrameMs: Math.round((intervals[Math.min(intervals.length - 1, Math.floor(intervals.length * 0.95))] || 0) * 100) / 100,
+    maxFrameMs: Math.round((intervals.at(-1) || 0) * 100) / 100
+  };
+}
+
+let metrics = null;
+try {
+  await fetch("/test-seed-large", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 2000 }) });
+  const loadStarted = performance.now();
+  frame.src = "/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=performance&asset=%2Fassets%2Ftest.board.json";
+  await new Promise((resolve) => frame.addEventListener("load", resolve, { once: true }));
+  const doc = frame.contentDocument;
+  const win = frame.contentWindow;
+  const shell = doc.querySelector("#canvas-shell");
+  shell.setPointerCapture = () => {};
+  const readyLimit = performance.now() + 10000;
+  while (doc.querySelectorAll("#node-layer [data-node-id]").length !== 2000 && performance.now() < readyLimit) await wait(25);
+  const readyMs = performance.now() - loadStarted;
+  assert(doc.querySelectorAll("#node-layer [data-node-id]").length === 2000, "2,000 DOM nodes did not render");
+
+  const memoryStart = performance.memory?.usedJSHeapSize || null;
+  const zoomFrames = [];
+  for (let index = 0; index < 90; index += 1) {
+    zoomFrames.push(await nextFrame());
+    shell.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true, cancelable: true, ctrlKey: true, deltaY: index % 2 ? 4 : -4, clientX: 640, clientY: 380
+    }));
+  }
+
+  doc.querySelector('[data-tool="select"]').click();
+  const node = doc.querySelector('[data-node-id="perf-0"]');
+  const rect = node.getBoundingClientRect();
+  pointer("pointerdown", node, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+  const dragFrames = [];
+  for (let index = 0; index < 90; index += 1) {
+    dragFrames.push(await nextFrame());
+    pointer("pointermove", shell, { clientX: rect.left + rect.width / 2 + index, clientY: rect.top + rect.height / 2 + (index % 9) });
+  }
+  pointer("pointerup", shell, { clientX: rect.left + rect.width / 2 + 90, clientY: rect.top + rect.height / 2 });
+  await wait(250);
+
+  metrics = {
+    nodes: doc.querySelectorAll("#node-layer [data-node-id]").length,
+    domElements: doc.querySelectorAll("*").length,
+    readyMs: Math.round(readyMs * 100) / 100,
+    zoom: frameMetrics(zoomFrames),
+    drag: frameMetrics(dragFrames),
+    memoryStart,
+    memoryEnd: performance.memory?.usedJSHeapSize || null,
+    userAgent: navigator.userAgent
+  };
+  assert(metrics.readyMs < 10000, `2,000-node ready time exceeded 10s: ${metrics.readyMs}ms`);
+  assert(metrics.zoom.averageFps >= 20 && metrics.zoom.p95FrameMs <= 100, `zoom frame budget failed: ${JSON.stringify(metrics.zoom)}`);
+  assert(metrics.drag.averageFps >= 20 && metrics.drag.p95FrameMs <= 100, `drag frame budget failed: ${JSON.stringify(metrics.drag)}`);
+  const renderedShape = node.querySelector("rect,ellipse,polygon");
+  assert(renderedShape && ![...renderedShape.attributes].some((attribute) => /NaN|Infinity/.test(attribute.value)), "drag produced invalid geometry");
+  output.textContent = `WHITEBOARD_PERFORMANCE_PASSED ${JSON.stringify(metrics, null, 2)}`;
+  await fetch("/performance-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "passed", metrics }) });
+} catch (error) {
+  output.textContent = `WHITEBOARD_PERFORMANCE_FAILED ${error.stack || error}`;
+  await fetch("/performance-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "failed", metrics, error: String(error.stack || error) }) });
+}
+</script></body></html>

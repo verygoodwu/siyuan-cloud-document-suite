@@ -1,6 +1,6 @@
 {
   "name": "siyuan-cloud-document-suite",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "private": true,
   "description": "Cloud Document Suite for documents, spreadsheets, mind maps, and editable whiteboards in SiYuan.",
   "packageManager": "pnpm@11.19.0",

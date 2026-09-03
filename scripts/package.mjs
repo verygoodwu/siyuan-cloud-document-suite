@@ -31,6 +31,7 @@ await Promise.all([
   ,copyVersionedHtml("static/whiteboard-model.js", "dist/whiteboard-model.js")
   ,copyVersionedHtml("static/whiteboard-renderer.js", "dist/whiteboard-renderer.js")
   ,copyVersionedHtml("static/whiteboard-layout.js", "dist/whiteboard-layout.js")
+  ,copyVersionedHtml("static/whiteboard-interactions.js", "dist/whiteboard-interactions.js")
   ,copyVersionedHtml("static/whiteboard-templates.js", "dist/whiteboard-templates.js")
   ,copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
 ]);

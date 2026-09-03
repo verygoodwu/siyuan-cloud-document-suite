@@ -7,6 +7,7 @@ import {
   detachWhiteboardReferences,
   documentBounds,
   duplicateWhiteboardNodes,
+  endpointPosition,
   frameWhiteboardNodes,
   groupWhiteboardNodes,
   nodeBounds,
@@ -25,11 +26,17 @@ import {
   distributeWhiteboardNodes,
   nodesInMarquee
 } from "./whiteboard-layout.js?v=__PLUGIN_VERSION__";
+import {
+  connectableNodeAtPoint,
+  selectionBounds,
+  snapWhiteboardMove
+} from "./whiteboard-interactions.js?v=__PLUGIN_VERSION__";
 import { instantiateWhiteboardTemplate } from "./whiteboard-templates.js?v=__PLUGIN_VERSION__";
 import {
   buildWhiteboardSvg,
   renderSelection,
   renderWhiteboard,
+  renderWhiteboardNodes,
   updateViewportTransform
 } from "./whiteboard-renderer.js?v=__PLUGIN_VERSION__";
 
@@ -79,6 +86,7 @@ let tool = "select";
 let temporaryHand = false;
 let interaction = null;
 let saveTimer;
+let viewportSaveTimer;
 let saving = false;
 let saveAgain = false;
 let revision = 0;
@@ -87,6 +95,7 @@ let history = [];
 let historyIndex = -1;
 let clipboardNodes = [];
 let editingNodeId = null;
+const DRAG_THRESHOLD_PX = 5;
 
 function setStatus(message, state = "idle") {
   status.textContent = message;
@@ -157,8 +166,8 @@ function render() {
   const bounds = renderSelection(whiteboard, selectedIds, selectionLayer);
   emptyTip.hidden = whiteboard.nodes.length > 0;
   zoomValue.textContent = `${Math.round(currentViewport().zoom * 100)}%`;
-  positionSelectionToolbar(bounds);
   syncSelectionToolbar();
+  positionSelectionToolbar(bounds);
   undoButton.disabled = historyIndex <= 0;
   redoButton.disabled = historyIndex >= history.length - 1;
 }
@@ -168,20 +177,42 @@ function renderSelectionOnly() {
     element.classList.toggle("selected", selectedIds.has(element.getAttribute("data-node-id")));
   });
   const bounds = renderSelection(whiteboard, selectedIds, selectionLayer);
-  positionSelectionToolbar(bounds);
   syncSelectionToolbar();
+  positionSelectionToolbar(bounds);
+}
+
+function renderViewportOnly() {
+  updateViewportTransform(viewportLayer, currentViewport());
+  zoomValue.textContent = `${Math.round(currentViewport().zoom * 100)}%`;
+  const bounds = selectedIds.size ? selectionBounds(whiteboard, [...selectedIds]) : null;
+  positionSelectionToolbar(bounds);
+}
+
+function renderInteractionNodes(nodeIds) {
+  renderWhiteboardNodes(whiteboard, nodeLayer, nodeIds, selectedIds);
+  const bounds = renderSelection(whiteboard, selectedIds, selectionLayer);
+  positionSelectionToolbar(bounds);
 }
 
 function positionSelectionToolbar(bounds) {
-  if (!bounds || selectedIds.size === 0) {
+  if (!bounds || selectedIds.size === 0 || editingNodeId) {
     selectionToolbar.hidden = true;
     return;
   }
-  const top = worldToScreen(bounds.x + bounds.width / 2, bounds.y - 15);
   selectionToolbar.hidden = false;
   const width = selectionToolbar.offsetWidth || 280;
+  const height = selectionToolbar.offsetHeight || 46;
+  const top = worldToScreen(bounds.x + bounds.width / 2, bounds.y);
+  const bottom = worldToScreen(bounds.x + bounds.width / 2, bounds.bottom);
+  const quickClearance = selectedIds.size === 1 && !["connector", "freehand", "image", "text"].includes(selectedNodes()[0]?.type)
+    ? 28 * currentViewport().zoom + 18
+    : 14;
+  const aboveY = top.y - quickClearance;
+  const belowY = bottom.y + quickClearance;
+  const placeBelow = aboveY - height < 8;
+  selectionToolbar.dataset.placement = placeBelow ? "below" : "above";
   selectionToolbar.style.left = `${Math.min(shell.clientWidth - width / 2 - 8, Math.max(width / 2 + 8, top.x))}px`;
-  selectionToolbar.style.top = `${Math.max(52, top.y)}px`;
+  selectionToolbar.style.top = `${placeBelow ? Math.min(shell.clientHeight - height - 8, belowY) : aboveY}px`;
 }
 
 function safeHex(value, fallback) {
@@ -191,7 +222,11 @@ function safeHex(value, fallback) {
 function syncSelectionToolbar() {
   const nodes = selectedNodes();
   document.querySelectorAll("[data-single-selection]").forEach((element) => { element.hidden = nodes.length !== 1; });
-  arrangeAction.hidden = nodes.length < 2;
+  const shapeCount = nodes.filter((node) => node.type !== "connector").length;
+  arrangeAction.hidden = shapeCount < 2;
+  document.querySelector("#group").hidden = shapeCount < 2;
+  document.querySelector("#ungroup").hidden = !nodes.some((node) => node.groupId);
+  document.querySelector("#create-frame").hidden = shapeCount < 1;
   if (nodes.length !== 1) return;
   const node = nodes[0];
   fillColor.value = safeHex(node.style.fill, "#ffffff");
@@ -231,6 +266,11 @@ function cacheAndScheduleSave(message = "正在保存…") {
   setStatus(message, "saving");
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void persist(false), 700);
+}
+
+function scheduleViewportSave() {
+  window.clearTimeout(viewportSaveTimer);
+  viewportSaveTimer = window.setTimeout(() => cacheAndScheduleSave("正在保存视图…"), 180);
 }
 
 function commitChange({ history: withHistory = true } = {}) {
@@ -273,11 +313,30 @@ async function persist(force) {
 
 function restoreHistory(nextIndex) {
   if (nextIndex < 0 || nextIndex >= history.length || nextIndex === historyIndex) return;
+  const previous = whiteboard;
   historyIndex = nextIndex;
-  whiteboard = normalizeWhiteboardDocument(JSON.parse(history[historyIndex]));
+  const restored = normalizeWhiteboardDocument(JSON.parse(history[historyIndex]));
+  const previousOrder = previous.nodes.map((node) => node.id);
+  const restoredOrder = restored.nodes.map((node) => node.id);
+  const orderUnchanged = previousOrder.length === restoredOrder.length
+    && previousOrder.every((id, index) => id === restoredOrder[index]);
+  const previousNodes = new Map(previous.nodes.map((node) => [node.id, JSON.stringify(node)]));
+  const restoredNodes = new Map(restored.nodes.map((node) => [node.id, JSON.stringify(node)]));
+  const changedIds = new Set([...previousNodes.keys(), ...restoredNodes.keys()].filter((id) => previousNodes.get(id) !== restoredNodes.get(id)));
+  whiteboard = restored;
   selectedIds = new Set([...selectedIds].filter((id) => nodeById(id)));
   cacheAndScheduleSave();
-  render();
+  if (orderUnchanged && changedIds.size <= 64) {
+    updateViewportTransform(viewportLayer, currentViewport());
+    renderWhiteboardNodes(whiteboard, nodeLayer, changedIds, selectedIds);
+    const bounds = renderSelection(whiteboard, selectedIds, selectionLayer);
+    emptyTip.hidden = whiteboard.nodes.length > 0;
+    zoomValue.textContent = `${Math.round(currentViewport().zoom * 100)}%`;
+    syncSelectionToolbar();
+    positionSelectionToolbar(bounds);
+    undoButton.disabled = historyIndex <= 0;
+    redoButton.disabled = historyIndex >= history.length - 1;
+  } else render();
 }
 
 function selectOnly(id) {
@@ -296,7 +355,7 @@ function createNodeAt(type, point, overrides = {}) {
     y: point.y - height / 2,
     width,
     height,
-    text: type === "sticky" ? "输入便签内容" : type === "text" ? "输入文字" : "",
+    text: "",
     ...overrides
   });
   whiteboard.nodes.push(node);
@@ -305,21 +364,33 @@ function createNodeAt(type, point, overrides = {}) {
   return node;
 }
 
-function createConnectedNode(source, direction = "right", edit = true) {
+function connectedNodeSize(source) {
+  return {
+    width: Math.max(96, Math.min(320, source.width || 168)),
+    height: Math.max(52, Math.min(220, source.height || 88))
+  };
+}
+
+function connectedNodeType(source) {
+  return ["rect", "ellipse", "diamond", "sticky"].includes(source.type) ? source.type : "rect";
+}
+
+function directionBetween(source, point) {
   const bounds = nodeBounds(source);
-  const gap = 120;
-  const targetPoint = {
-    top: { x: bounds.x + bounds.width / 2, y: bounds.y - gap },
-    right: { x: bounds.right + gap, y: bounds.y + bounds.height / 2 },
-    bottom: { x: bounds.x + bounds.width / 2, y: bounds.bottom + gap },
-    left: { x: bounds.x - gap, y: bounds.y + bounds.height / 2 }
-  }[direction];
-  const target = createWhiteboardNode("rect", {
-    x: targetPoint.x - 84,
-    y: targetPoint.y - 44,
-    width: 168,
-    height: 88,
-    text: "输入文字"
+  const dx = point.x - (bounds.x + bounds.width / 2);
+  const dy = point.y - (bounds.y + bounds.height / 2);
+  return Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "right" : "left") : (dy >= 0 ? "bottom" : "top");
+}
+
+function createConnectedNodeAt(source, center, direction = directionBetween(source, center), edit = true) {
+  const size = connectedNodeSize(source);
+  const target = createWhiteboardNode(connectedNodeType(source), {
+    x: center.x - size.width / 2,
+    y: center.y - size.height / 2,
+    width: size.width,
+    height: size.height,
+    text: "",
+    style: JSON.parse(JSON.stringify(source.style))
   });
   const connector = createWhiteboardNode("connector", {
     from: { nodeId: source.id, anchor: anchorForDirection(direction) },
@@ -330,6 +401,19 @@ function createConnectedNode(source, direction = "right", edit = true) {
   commitChange();
   if (edit) beginTextEditing(target);
   return target;
+}
+
+function createConnectedNode(source, direction = "right", edit = true) {
+  const bounds = nodeBounds(source);
+  const size = connectedNodeSize(source);
+  const gap = 72;
+  const targetPoint = {
+    top: { x: bounds.x + bounds.width / 2, y: bounds.y - gap - size.height / 2 },
+    right: { x: bounds.right + gap + size.width / 2, y: bounds.y + bounds.height / 2 },
+    bottom: { x: bounds.x + bounds.width / 2, y: bounds.bottom + gap + size.height / 2 },
+    left: { x: bounds.x - gap - size.width / 2, y: bounds.y + bounds.height / 2 }
+  }[direction];
+  return createConnectedNodeAt(source, targetPoint, direction, edit);
 }
 
 function deleteSelection() {
@@ -366,17 +450,28 @@ function pasteSelection() {
   commitChange();
 }
 
+function textEditingBounds(node) {
+  if (node.type !== "connector") return nodeBounds(node);
+  const from = endpointPosition(whiteboard, node.from);
+  const to = endpointPosition(whiteboard, node.to, from);
+  const center = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  return { x: center.x - 90, y: center.y - 22, width: 180, height: 44, right: center.x + 90, bottom: center.y + 22 };
+}
+
 function beginTextEditing(node, options = {}) {
-  if (!node || node.type === "connector" || node.type === "freehand" || node.type === "image") return;
+  if (!node || node.type === "freehand" || node.type === "image") return;
   if (editingNodeId && editingNodeId !== node.id) finishTextEditing();
   editingNodeId = node.id;
-  const start = worldToScreen(node.x, node.y);
+  const bounds = textEditingBounds(node);
+  const start = worldToScreen(bounds.x, bounds.y);
   textEditor.hidden = false;
+  selectionToolbar.hidden = true;
   textEditorInput.textContent = options.replaceWith ?? node.text ?? "";
+  textEditorInput.dataset.placeholder = node.type === "connector" ? "输入连线说明" : node.type === "sticky" ? "输入便签内容" : "输入文字";
   textEditor.style.left = `${start.x}px`;
   textEditor.style.top = `${start.y}px`;
-  textEditor.style.width = `${Math.max(80, node.width * currentViewport().zoom)}px`;
-  textEditor.style.height = `${Math.max(38, node.height * currentViewport().zoom)}px`;
+  textEditor.style.width = `${Math.max(80, bounds.width * currentViewport().zoom)}px`;
+  textEditor.style.height = `${Math.max(38, bounds.height * currentViewport().zoom)}px`;
   textEditorInput.style.fontSize = `${Math.max(12, node.style.fontSize * currentViewport().zoom)}px`;
   textEditorInput.style.color = node.style.textColor;
   textEditorInput.style.textAlign = node.style.textAlign;
@@ -408,18 +503,37 @@ function finishTextEditing(cancel = false) {
 }
 
 function beginMove(event, id, point) {
+  const additive = event.shiftKey || event.ctrlKey || event.metaKey;
   if (!selectedIds.has(id)) {
     const next = resolveWhiteboardSelection(whiteboard, [id]);
-    selectedIds = event.shiftKey ? new Set([...selectedIds, ...next]) : next;
+    selectedIds = additive ? new Set([...selectedIds, ...next]) : next;
   }
-  else if (event.shiftKey) {
+  else if (additive) {
     selectedIds.delete(id);
     render();
     return;
   }
+  const selectedNode = nodeById(id);
+  if (selectedNode?.type === "connector") {
+    renderSelectionOnly();
+    return;
+  }
   const originals = new Map();
   for (const node of effectiveSelectedNodes()) originals.set(node.id, JSON.parse(JSON.stringify(node)));
-  interaction = { type: "move", pointerId: event.pointerId, start: point, originals, changed: false };
+  const movedIds = [...originals.keys()].filter((nodeId) => nodeById(nodeId)?.type !== "connector");
+  interaction = {
+    type: "move",
+    pointerId: event.pointerId,
+    start: point,
+    startClient: { x: event.clientX, y: event.clientY },
+    originals,
+    movedIds,
+    originalBounds: selectionBounds(whiteboard, movedIds),
+    duplicateOnDrag: event.altKey,
+    duplicated: false,
+    dragging: false,
+    changed: false
+  };
   shell.setPointerCapture(event.pointerId);
   renderSelectionOnly();
 }
@@ -484,6 +598,94 @@ function drawMarquee(start, current) {
   draftLayer.append(rectangle);
 }
 
+function drawSnapIndicators(indicators = []) {
+  draftLayer.replaceChildren();
+  for (const indicator of indicators) {
+    if (indicator.type === "align-x") {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("class", "snap-guide");
+      line.setAttribute("x1", indicator.x); line.setAttribute("x2", indicator.x);
+      line.setAttribute("y1", indicator.y1 - 20); line.setAttribute("y2", indicator.y2 + 20);
+      draftLayer.append(line);
+    } else if (indicator.type === "align-y") {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("class", "snap-guide");
+      line.setAttribute("x1", indicator.x1 - 20); line.setAttribute("x2", indicator.x2 + 20);
+      line.setAttribute("y1", indicator.y); line.setAttribute("y2", indicator.y);
+      draftLayer.append(line);
+    } else if (indicator.type === "gap-x") {
+      for (const [x1, x2] of [[indicator.x1, indicator.x2], [indicator.x3, indicator.x4]]) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("class", "snap-guide"); line.setAttribute("x1", x1); line.setAttribute("x2", x2); line.setAttribute("y1", indicator.y); line.setAttribute("y2", indicator.y);
+        draftLayer.append(line);
+      }
+    } else if (indicator.type === "gap-y") {
+      for (const [y1, y2] of [[indicator.y1, indicator.y2], [indicator.y3, indicator.y4]]) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("class", "snap-guide"); line.setAttribute("x1", indicator.x); line.setAttribute("x2", indicator.x); line.setAttribute("y1", y1); line.setAttribute("y2", y2);
+        draftLayer.append(line);
+      }
+    }
+  }
+}
+
+function setConnectionTarget(id) {
+  nodeLayer.querySelectorAll(".connection-target").forEach((element) => element.classList.remove("connection-target"));
+  if (id) nodeLayer.querySelector(`[data-node-id="${CSS.escape(id)}"]`)?.classList.add("connection-target");
+}
+
+function drawQuickCreatePreview(source, point) {
+  draftLayer.replaceChildren();
+  const direction = directionBetween(source, point);
+  const size = connectedNodeSize(source);
+  const preview = createWhiteboardNode(connectedNodeType(source), {
+    x: point.x - size.width / 2,
+    y: point.y - size.height / 2,
+    width: size.width,
+    height: size.height,
+    style: JSON.parse(JSON.stringify(source.style))
+  });
+  const connector = createWhiteboardNode("connector", {
+    from: { nodeId: source.id, anchor: direction },
+    to: { nodeId: preview.id, anchor: oppositeAnchor(direction) }
+  });
+  const previewDocument = { ...whiteboard, nodes: [...whiteboard.nodes, preview] };
+  drawDraftPath(connectorPath(previewDocument, connector));
+  const rectangle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rectangle.setAttribute("x", preview.x); rectangle.setAttribute("y", preview.y);
+  rectangle.setAttribute("width", preview.width); rectangle.setAttribute("height", preview.height);
+  rectangle.setAttribute("rx", "9"); rectangle.setAttribute("fill", `${source.style.fill === "transparent" ? "#ffffff" : source.style.fill}`);
+  rectangle.setAttribute("fill-opacity", "0.65"); rectangle.setAttribute("stroke", "#3370ff"); rectangle.setAttribute("stroke-dasharray", "6 5");
+  rectangle.setAttribute("vector-effect", "non-scaling-stroke");
+  draftLayer.append(rectangle);
+}
+
+function beginQuickCreate(event, source, direction) {
+  interaction = {
+    type: "quick-create",
+    pointerId: event.pointerId,
+    sourceId: source.id,
+    direction,
+    startClient: { x: event.clientX, y: event.clientY },
+    current: screenToWorld(event.clientX, event.clientY),
+    dragging: false
+  };
+  shell.setPointerCapture(event.pointerId);
+}
+
+function beginReconnect(event, connector, end) {
+  interaction = {
+    type: "reconnect",
+    pointerId: event.pointerId,
+    connectorId: connector.id,
+    end,
+    original: JSON.parse(JSON.stringify(connector)),
+    current: screenToWorld(event.clientX, event.clientY),
+    targetId: null
+  };
+  shell.setPointerCapture(event.pointerId);
+}
+
 function beginConnector(event, id, point) {
   const source = nodeById(id);
   if (!source || source.type === "connector" || source.type === "freehand") return;
@@ -498,29 +700,36 @@ function beginConnector(event, id, point) {
 }
 
 function onPointerDown(event) {
-  if (event.button !== 0 && event.button !== 1) return;
+  if (![0, 1, 2].includes(event.button)) return;
+  if (event.button === 2) event.preventDefault();
   if (editingNodeId) finishTextEditing();
   const point = screenToWorld(event.clientX, event.clientY);
   const resizeHandle = event.target instanceof Element ? event.target.closest("[data-resize-handle]")?.getAttribute("data-resize-handle") : null;
   const quickAnchor = event.target instanceof Element ? event.target.closest("[data-quick-anchor]")?.getAttribute("data-quick-anchor") : null;
+  const connectorEnd = event.target instanceof Element ? event.target.closest("[data-connector-end]")?.getAttribute("data-connector-end") : null;
   const id = nodeIdFromTarget(event.target);
+  if (event.button === 1 || event.button === 2 || tool === "hand" || temporaryHand) {
+    beginPan(event);
+    return;
+  }
   if (tool === "select" && id && event.detail >= 2) {
     selectedIds = new Set([id]);
     render();
     beginTextEditing(nodeById(id));
     return;
   }
+  if (connectorEnd) {
+    const connector = selectedNodes()[0];
+    if (connector?.type === "connector") beginReconnect(event, connector, connectorEnd);
+    return;
+  }
   if (quickAnchor) {
     const source = selectedNodes()[0];
-    if (source) createConnectedNode(source, quickAnchor);
+    if (source) beginQuickCreate(event, source, quickAnchor);
     return;
   }
   if (resizeHandle) {
     beginResize(event, resizeHandle, point);
-    return;
-  }
-  if (event.button === 1 || tool === "hand" || temporaryHand) {
-    beginPan(event);
     return;
   }
   if (tool === "pen") {
@@ -539,9 +748,9 @@ function onPointerDown(event) {
   }
   if (id) beginMove(event, id, point);
   else {
-    interaction = { type: "marquee", pointerId: event.pointerId, start: point, current: point, additive: event.shiftKey };
+    interaction = { type: "marquee", pointerId: event.pointerId, start: point, current: point, additive: event.shiftKey || event.ctrlKey || event.metaKey };
     shell.setPointerCapture(event.pointerId);
-    if (!event.shiftKey) selectedIds.clear();
+    if (!(event.shiftKey || event.ctrlKey || event.metaKey)) selectedIds.clear();
     renderSelectionOnly();
   }
 }
@@ -555,20 +764,38 @@ function onPointerMove(event) {
     whiteboard.viewport.x = interaction.original.x + dx;
     whiteboard.viewport.y = interaction.original.y + dy;
     interaction.changed ||= Math.abs(dx) + Math.abs(dy) > 1;
-    render();
+    renderViewportOnly();
     return;
   }
   if (interaction.type === "move") {
-    const dx = point.x - interaction.start.x;
-    const dy = point.y - interaction.start.y;
+    const screenDistance = Math.hypot(event.clientX - interaction.startClient.x, event.clientY - interaction.startClient.y);
+    if (!interaction.dragging && screenDistance < DRAG_THRESHOLD_PX) return;
+    if (!interaction.dragging) {
+      interaction.dragging = true;
+      if (interaction.duplicateOnDrag) {
+        const duplicateIds = duplicateWhiteboardNodes(whiteboard, interaction.movedIds, 0);
+        selectedIds = new Set(duplicateIds);
+        interaction.movedIds = duplicateIds;
+        interaction.originals = new Map(duplicateIds.map((id) => [id, JSON.parse(JSON.stringify(nodeById(id)))]) );
+        interaction.originalBounds = selectionBounds(whiteboard, duplicateIds);
+        interaction.duplicated = true;
+      }
+    }
+    const rawDx = point.x - interaction.start.x;
+    const rawDy = point.y - interaction.start.y;
+    const snapped = event.ctrlKey || event.metaKey
+      ? { dx: rawDx, dy: rawDy, indicators: [] }
+      : snapWhiteboardMove(whiteboard, interaction.movedIds, interaction.originalBounds, rawDx, rawDy, currentViewport().zoom);
+    const { dx, dy } = snapped;
     for (const [id, original] of interaction.originals) {
       const node = nodeById(id);
       if (!node) continue;
       if (node.type === "freehand") node.points = original.points.map((item) => ({ x: item.x + dx, y: item.y + dy }));
-      else { node.x = original.x + dx; node.y = original.y + dy; }
+      else if (node.type !== "connector") { node.x = original.x + dx; node.y = original.y + dy; }
     }
-    interaction.changed ||= Math.abs(dx) + Math.abs(dy) > 0.5;
-    render();
+    interaction.changed = true;
+    renderInteractionNodes(interaction.movedIds);
+    drawSnapIndicators(snapped.indicators);
     return;
   }
   if (interaction.type === "resize") {
@@ -586,7 +813,7 @@ function onPointerMove(event) {
     Object.assign(node, JSON.parse(JSON.stringify(interaction.originalNode)));
     resizeWhiteboardNode(node, { x, y, width: right - x, height: bottom - y });
     interaction.changed = true;
-    render();
+    renderInteractionNodes([interaction.nodeId]);
     return;
   }
   if (interaction.type === "pen") {
@@ -599,11 +826,37 @@ function onPointerMove(event) {
   }
   if (interaction.type === "connector") {
     interaction.current = point;
+    const target = connectableNodeAtPoint(whiteboard, point, [interaction.sourceId], 12 / currentViewport().zoom);
+    interaction.targetId = target?.id || null;
+    setConnectionTarget(interaction.targetId);
+    const targetEndpoint = target ? { nodeId: target.id, anchor: nodeAnchorFromPoint(target, point) } : point;
     const draft = createWhiteboardNode("connector", {
       from: { nodeId: interaction.sourceId, anchor: interaction.sourceAnchor },
-      to: point,
+      to: targetEndpoint,
       lineShape: "rightAngle"
     });
+    drawDraftPath(connectorPath(whiteboard, draft));
+    return;
+  }
+  if (interaction.type === "quick-create") {
+    interaction.current = point;
+    interaction.dragging ||= Math.hypot(event.clientX - interaction.startClient.x, event.clientY - interaction.startClient.y) >= DRAG_THRESHOLD_PX;
+    if (interaction.dragging) {
+      const source = nodeById(interaction.sourceId);
+      if (source) drawQuickCreatePreview(source, point);
+    }
+    return;
+  }
+  if (interaction.type === "reconnect") {
+    interaction.current = point;
+    const connector = nodeById(interaction.connectorId);
+    if (!connector) return;
+    const opposite = interaction.end === "from" ? connector.to : connector.from;
+    const target = connectableNodeAtPoint(whiteboard, point, [opposite?.nodeId].filter(Boolean), 12 / currentViewport().zoom);
+    interaction.targetId = target?.id || null;
+    setConnectionTarget(interaction.targetId);
+    const draft = JSON.parse(JSON.stringify(interaction.original));
+    draft[interaction.end] = target ? { nodeId: target.id, anchor: nodeAnchorFromPoint(target, point) } : point;
     drawDraftPath(connectorPath(whiteboard, draft));
     return;
   }
@@ -619,8 +872,9 @@ function onPointerUp(event) {
   interaction = null;
   shell.classList.remove("dragging");
   draftLayer.replaceChildren();
+  setConnectionTarget(null);
   if (finished.type === "pan") {
-    if (finished.changed) cacheAndScheduleSave("正在保存视图…");
+    if (finished.changed) scheduleViewportSave();
     return;
   }
   if (finished.type === "move" || finished.type === "resize") {
@@ -638,8 +892,7 @@ function onPointerUp(event) {
     return;
   }
   if (finished.type === "connector") {
-    const targetId = nodeIdFromTarget(document.elementFromPoint(event.clientX, event.clientY));
-    const target = nodeById(targetId);
+    const target = nodeById(finished.targetId);
     if (target && target.id !== finished.sourceId && target.type !== "connector" && target.type !== "freehand") {
       const point = screenToWorld(event.clientX, event.clientY);
       const connector = createWhiteboardNode("connector", {
@@ -650,6 +903,24 @@ function onPointerUp(event) {
       selectedIds = new Set([connector.id]);
       commitChange();
     }
+    return;
+  }
+  if (finished.type === "quick-create") {
+    const source = nodeById(finished.sourceId);
+    if (!source) return;
+    if (finished.dragging) createConnectedNodeAt(source, finished.current, directionBetween(source, finished.current));
+    else createConnectedNode(source, finished.direction);
+    return;
+  }
+  if (finished.type === "reconnect") {
+    const connector = nodeById(finished.connectorId);
+    if (!connector) return;
+    const target = nodeById(finished.targetId);
+    connector[finished.end] = target
+      ? { nodeId: target.id, anchor: nodeAnchorFromPoint(target, finished.current) }
+      : finished.current;
+    selectedIds = new Set([connector.id]);
+    commitChange();
     return;
   }
   if (finished.type === "marquee") {
@@ -664,7 +935,7 @@ function onPointerUp(event) {
 
 function onWheel(event) {
   event.preventDefault();
-  if (event.ctrlKey || event.metaKey || Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+  if (event.ctrlKey || event.metaKey) {
     const rect = shell.getBoundingClientRect();
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
@@ -677,11 +948,12 @@ function onWheel(event) {
     viewport.y = sy - worldY * zoom;
     viewport.zoom = zoom;
   } else {
-    whiteboard.viewport.x -= event.deltaX;
-    whiteboard.viewport.y -= event.deltaY;
+    const horizontal = event.shiftKey && Math.abs(event.deltaX) < Math.abs(event.deltaY);
+    whiteboard.viewport.x -= horizontal ? event.deltaY : event.deltaX;
+    whiteboard.viewport.y -= horizontal ? 0 : event.deltaY;
   }
-  cacheAndScheduleSave("正在保存视图…");
-  render();
+  scheduleViewportSave();
+  renderViewportOnly();
 }
 
 function zoomAtCenter(factor) {
@@ -694,12 +966,11 @@ function zoomAtCenter(factor) {
   viewport.x = sx - worldX * zoom;
   viewport.y = sy - worldY * zoom;
   viewport.zoom = zoom;
-  cacheAndScheduleSave("正在保存视图…");
-  render();
+  scheduleViewportSave();
+  renderViewportOnly();
 }
 
-function fitContent() {
-  const bounds = documentBounds(whiteboard);
+function fitBounds(bounds) {
   if (!bounds.width || !bounds.height) {
     whiteboard.viewport = { x: shell.clientWidth / 2, y: shell.clientHeight / 2, zoom: 1 };
   } else {
@@ -711,8 +982,18 @@ function fitContent() {
       zoom
     };
   }
-  cacheAndScheduleSave("正在保存视图…");
-  render();
+  scheduleViewportSave();
+  renderViewportOnly();
+}
+
+function fitContent() {
+  fitBounds(documentBounds(whiteboard));
+}
+
+function fitSelection() {
+  const ids = [...effectiveSelectedIds()].filter((id) => nodeById(id)?.type !== "connector");
+  if (!ids.length) return;
+  fitBounds(documentBounds(whiteboard, ids));
 }
 
 function downloadBlob(blob, name) {
@@ -874,9 +1155,15 @@ function onKeyDown(event) {
   } else if ((key === "enter" || key === "f2") && selectedIds.size === 1) {
     event.preventDefault();
     beginTextEditing(selectedNodes()[0]);
+  } else if (!modifier && !event.altKey && key === "1") {
+    event.preventDefault();
+    fitContent();
+  } else if (!modifier && !event.altKey && key === "2") {
+    event.preventDefault();
+    fitSelection();
   } else if (!modifier && !event.altKey && key.length === 1 && selectedIds.size === 1) {
     const node = selectedNodes()[0];
-    if (node && !["connector", "freehand", "image"].includes(node.type)) {
+    if (node && !["freehand", "image"].includes(node.type)) {
       event.preventDefault();
       beginTextEditing(node, { replaceWith: event.key, selectAll: false });
     }
@@ -886,6 +1173,12 @@ function onKeyDown(event) {
       event.preventDefault();
       createConnectedNode(source, event.shiftKey ? "left" : "right");
     }
+  } else if (event.altKey && ["arrowup", "arrowdown"].includes(key) && selectedIds.size === 1) {
+    const source = selectedNodes()[0];
+    if (source && !["connector", "freehand", "image", "text"].includes(source.type)) {
+      event.preventDefault();
+      createConnectedNode(source, key === "arrowup" ? "top" : "bottom");
+    }
   } else if (["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key) && selectedIds.size) {
     event.preventDefault();
     const step = event.shiftKey ? 10 : 1;
@@ -893,8 +1186,8 @@ function onKeyDown(event) {
   } else if ({ v: "select", h: "hand", t: "text", n: "sticky", r: "rect", o: "ellipse", d: "diamond", l: "connector", p: "pen" }[key]) {
     setTool({ v: "select", h: "hand", t: "text", n: "sticky", r: "rect", o: "ellipse", d: "diamond", l: "connector", p: "pen" }[key]);
   } else if (key === "escape") {
-    setTool("select");
-    selectedIds.clear();
+    if (selectedIds.size) selectedIds.clear();
+    else if (tool !== "select") setTool("select");
     render();
   } else if (key === "?") {
     document.querySelector("#shortcut-dialog").showModal();
@@ -955,6 +1248,7 @@ function bindControls() {
   });
   document.querySelector("#zoom-in").addEventListener("click", () => zoomAtCenter(1.2));
   document.querySelector("#zoom-out").addEventListener("click", () => zoomAtCenter(1 / 1.2));
+  document.querySelector("#zoom-selection").addEventListener("click", fitSelection);
   document.querySelector("#fit").addEventListener("click", fitContent);
   document.querySelector("#export-svg").addEventListener("click", exportSvg);
   document.querySelector("#export-png").addEventListener("click", exportPng);
@@ -972,6 +1266,7 @@ function bindControls() {
   shell.addEventListener("pointerup", onPointerUp);
   shell.addEventListener("pointercancel", onPointerUp);
   shell.addEventListener("wheel", onWheel, { passive: false });
+  shell.addEventListener("contextmenu", (event) => event.preventDefault());
   shell.addEventListener("dblclick", (event) => {
     const id = nodeIdFromTarget(event.target);
     if (id && editingNodeId !== id) beginTextEditing(nodeById(id));

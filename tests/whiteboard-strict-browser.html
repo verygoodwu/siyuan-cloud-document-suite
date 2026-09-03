@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Whiteboard strict interaction test</title></head>
+<body><pre id="result">running</pre><iframe id="editor" style="width:1200px;height:720px"></iframe>
+<script type="module">
+const checks = [];
+const metrics = {};
+const frame = document.querySelector("#editor");
+const output = document.querySelector("#result");
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const pass = (name) => checks.push(name);
+const pointer = (type, target, options = {}) => target.dispatchEvent(new PointerEvent(type, {
+  bubbles: true, cancelable: true, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 901, ...options
+}));
+
+let doc;
+let win;
+let shell;
+const nodeElement = (id) => doc.querySelector(`#node-layer [data-node-id="${id}"]`);
+const selectedElements = () => [...doc.querySelectorAll("#node-layer .selected[data-node-id]")];
+const selectedId = () => selectedElements()[0]?.dataset.nodeId;
+const center = (element) => { const rect = element.getBoundingClientRect(); return { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }; };
+const nodeCount = () => doc.querySelectorAll("#node-layer [data-node-id]").length;
+const connectorCount = () => doc.querySelectorAll("#node-layer .whiteboard-connector").length;
+const textInput = () => doc.querySelector("#text-editor-input");
+const textEditor = () => doc.querySelector("#text-editor");
+
+async function commitText(value) {
+  assert(!textEditor().hidden, "text editor is closed");
+  textInput().textContent = value;
+  textInput().dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  textInput().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+  await wait(20);
+}
+
+async function selectNode(id, additive = false) {
+  doc.querySelector('[data-tool="select"]').click();
+  const element = nodeElement(id);
+  const point = center(element);
+  pointer("pointerdown", element, { ...point, shiftKey: additive });
+  pointer("pointerup", shell, { ...point, shiftKey: additive });
+  await wait(10);
+}
+
+async function createShape(x, y, text) {
+  doc.querySelector('[data-tool="rect"]').click();
+  pointer("pointerdown", shell, { clientX: x, clientY: y });
+  const id = selectedId();
+  assert(id && !textEditor().hidden, "shape creation did not enter editing");
+  await commitText(text);
+  return id;
+}
+
+function assertDirection(source, target, direction) {
+  const a = nodeElement(source).getBoundingClientRect();
+  const b = nodeElement(target).getBoundingClientRect();
+  if (direction === "top") assert(b.bottom < a.top, "top quick-create direction is wrong");
+  if (direction === "right") assert(b.left > a.right, "right quick-create direction is wrong");
+  if (direction === "bottom") assert(b.top > a.bottom, "bottom quick-create direction is wrong");
+  if (direction === "left") assert(b.right < a.left, "left quick-create direction is wrong");
+}
+
+try {
+  await fetch("/test-reset", { method: "POST" });
+  frame.src = "/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=strict&asset=%2Fassets%2Ftest.board.json";
+  await new Promise((resolve, reject) => {
+    frame.addEventListener("load", resolve, { once: true });
+    setTimeout(() => reject(new Error("editor load timeout")), 5000);
+  });
+  await wait(200);
+  doc = frame.contentDocument;
+  win = frame.contentWindow;
+  shell = doc.querySelector("#canvas-shell");
+  shell.setPointerCapture = () => {};
+
+  const root = await createShape(600, 350, "中心节点");
+
+  await selectNode(root);
+  doc.querySelector('[data-tool="rect"]').click();
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  assert(!textEditor().hidden, "Enter did not start editing");
+  textInput().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert(textEditor().hidden && selectedId() === root, "first Escape did not exit editing and preserve selection");
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert(selectedElements().length === 0 && doc.querySelector('[data-tool="rect"]').classList.contains("active"), "second Escape did not clear selection first");
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert(doc.querySelector('[data-tool="select"]').classList.contains("active"), "third Escape did not return to select tool");
+  pass("three-stage-escape-state-machine");
+
+  const clickTargets = {};
+  for (const direction of ["top", "right", "bottom", "left"]) {
+    await selectNode(root);
+    const quick = doc.querySelector(`[data-quick-anchor="${direction}"]`);
+    const point = center(quick);
+    const before = nodeCount();
+    pointer("pointerdown", quick, point);
+    pointer("pointerup", shell, point);
+    await wait(15);
+    assert(nodeCount() === before + 2 && !textEditor().hidden, `${direction} click quick-create failed`);
+    clickTargets[direction] = selectedId();
+    assertDirection(root, clickTargets[direction], direction);
+    await commitText(`${direction}-click`);
+  }
+  pass("four-direction-click-quick-create");
+
+  for (const direction of ["top", "right", "bottom", "left"]) {
+    await selectNode(root);
+    const quick = doc.querySelector(`[data-quick-anchor="${direction}"]`);
+    const start = center(quick);
+    const vectors = { top: [90, -155], right: [190, 85], bottom: [-95, 170], left: [-185, -80] };
+    const [dx, dy] = vectors[direction];
+    const drop = { clientX: start.clientX + dx, clientY: start.clientY + dy };
+    const before = nodeCount();
+    pointer("pointerdown", quick, start);
+    pointer("pointermove", shell, drop);
+    assert(doc.querySelector("#draft-layer rect"), `${direction} drag quick-create preview missing`);
+    pointer("pointerup", shell, drop);
+    await wait(15);
+    assert(nodeCount() === before + 2 && !textEditor().hidden, `${direction} drag quick-create failed`);
+    const target = selectedId();
+    const targetRect = nodeElement(target).getBoundingClientRect();
+    assert(Math.abs(targetRect.left + targetRect.width / 2 - drop.clientX) < 8, `${direction} drag ignored horizontal drop position`);
+    assert(Math.abs(targetRect.top + targetRect.height / 2 - drop.clientY) < 8, `${direction} drag ignored vertical drop position`);
+    await commitText(`${direction}-drag`);
+  }
+  pass("four-direction-drag-quick-create");
+
+  async function panWith(button, label) {
+    const before = doc.querySelector("#viewport-layer").getAttribute("transform");
+    pointer("pointerdown", shell, { button, buttons: button === 1 ? 4 : 2, clientX: 930, clientY: 620, pointerId: 910 + button });
+    pointer("pointermove", shell, { button, buttons: button === 1 ? 4 : 2, clientX: 970, clientY: 650, pointerId: 910 + button });
+    pointer("pointerup", shell, { button, buttons: 0, clientX: 970, clientY: 650, pointerId: 910 + button });
+    assert(doc.querySelector("#viewport-layer").getAttribute("transform") !== before, `${label} did not pan`);
+  }
+  await panWith(1, "middle mouse");
+  await panWith(2, "right mouse");
+  doc.querySelector('[data-tool="select"]').click();
+  const beforeSpace = doc.querySelector("#viewport-layer").getAttribute("transform");
+  win.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+  pointer("pointerdown", shell, { clientX: 900, clientY: 600, pointerId: 920 });
+  pointer("pointermove", shell, { clientX: 935, clientY: 628, pointerId: 920 });
+  pointer("pointerup", shell, { clientX: 935, clientY: 628, pointerId: 920 });
+  win.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", key: " ", bubbles: true }));
+  assert(doc.querySelector("#viewport-layer").getAttribute("transform") !== beforeSpace, "Space+drag did not pan");
+  pass("middle-right-space-pan");
+
+  const zoomBeforePan = doc.querySelector("#zoom-value").textContent;
+  const transformBeforeTrackpad = doc.querySelector("#viewport-layer").getAttribute("transform");
+  shell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 28, deltaY: 36, clientX: 600, clientY: 350 }));
+  assert(doc.querySelector("#zoom-value").textContent === zoomBeforePan, "trackpad pan changed zoom");
+  assert(doc.querySelector("#viewport-layer").getAttribute("transform") !== transformBeforeTrackpad, "trackpad pan did not move viewport");
+  shell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -70, clientX: 600, clientY: 350 }));
+  assert(doc.querySelector("#zoom-value").textContent !== zoomBeforePan, "trackpad pinch simulation did not zoom");
+  pass("trackpad-pan-and-pinch");
+
+  doc.querySelector("#fit").click();
+  const snapA = await createShape(300, 280, "吸附 A");
+  const snapB = await createShape(650, 286, "吸附 B");
+  await selectNode(snapB);
+  let elementB = nodeElement(snapB);
+  let rectA = nodeElement(snapA).getBoundingClientRect();
+  let rectB = elementB.getBoundingClientRect();
+  let startB = center(elementB);
+  const nearAlignDy = rectA.top - rectB.top + 4;
+  pointer("pointerdown", elementB, startB);
+  pointer("pointermove", shell, { clientX: startB.clientX + 45, clientY: startB.clientY + nearAlignDy });
+  assert(doc.querySelector("#draft-layer .snap-guide"), "snap guide did not appear");
+  pointer("pointerup", shell, { clientX: startB.clientX + 45, clientY: startB.clientY + nearAlignDy });
+  assert(!doc.querySelector("#draft-layer .snap-guide"), "snap guide did not clear after drag");
+  rectA = nodeElement(snapA).getBoundingClientRect();
+  rectB = nodeElement(snapB).getBoundingClientRect();
+  assert(Math.abs(rectA.top - rectB.top) < 2, "alignment snap did not align tops");
+  elementB = nodeElement(snapB);
+  startB = center(elementB);
+  const topBeforeCtrl = elementB.getBoundingClientRect().top;
+  pointer("pointerdown", elementB, startB);
+  pointer("pointermove", shell, { ctrlKey: true, clientX: startB.clientX + 10, clientY: startB.clientY + 4 });
+  assert(!doc.querySelector("#draft-layer .snap-guide"), "Ctrl did not temporarily disable snapping guides");
+  pointer("pointerup", shell, { ctrlKey: true, clientX: startB.clientX + 10, clientY: startB.clientY + 4 });
+  assert(Math.abs(nodeElement(snapB).getBoundingClientRect().top - topBeforeCtrl - 4) < 2, "Ctrl-disabled drag was still snapped");
+  for (const targetZoom of [0.5, 1, 2]) {
+    const currentZoom = Number.parseInt(doc.querySelector("#zoom-value").textContent, 10) / 100;
+    const deltaY = -Math.log(targetZoom / currentZoom) / 0.0015;
+    shell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY, clientX: 475, clientY: 350 }));
+    assert(Math.abs(Number.parseInt(doc.querySelector("#zoom-value").textContent, 10) / 100 - targetZoom) <= 0.02, `failed to set ${targetZoom} zoom`);
+    await selectNode(snapB);
+    elementB = nodeElement(snapB);
+    startB = center(elementB);
+    pointer("pointerdown", elementB, startB);
+    pointer("pointermove", shell, { ctrlKey: true, clientX: startB.clientX, clientY: startB.clientY + 20 });
+    pointer("pointerup", shell, { ctrlKey: true, clientX: startB.clientX, clientY: startB.clientY + 20 });
+    rectA = nodeElement(snapA).getBoundingClientRect();
+    elementB = nodeElement(snapB);
+    rectB = elementB.getBoundingClientRect();
+    startB = center(elementB);
+    const nearScreenThreshold = rectA.top - rectB.top + 6;
+    pointer("pointerdown", elementB, startB);
+    pointer("pointermove", shell, { clientX: startB.clientX, clientY: startB.clientY + nearScreenThreshold });
+    assert(doc.querySelector("#draft-layer .snap-guide"), `snap guide missing at ${targetZoom * 100}%`);
+    pointer("pointerup", shell, { clientX: startB.clientX, clientY: startB.clientY + nearScreenThreshold });
+    const snappedRect = nodeElement(snapB).getBoundingClientRect();
+    const snappedAnchors = [snappedRect.top, snappedRect.top + snappedRect.height / 2, snappedRect.bottom];
+    const alignmentDistances = [...doc.querySelectorAll("#node-layer .whiteboard-node:not(.whiteboard-connector)")]
+      .filter((element) => element.dataset.nodeId !== snapB)
+      .flatMap((element) => {
+        const rect = element.getBoundingClientRect();
+        const anchors = [rect.top, rect.top + rect.height / 2, rect.bottom];
+        return snappedAnchors.flatMap((movingAnchor) => anchors.map((targetAnchor) => Math.abs(targetAnchor - movingAnchor)));
+      });
+    const nearestAlignment = Math.min(...alignmentDistances);
+    assert(nearestAlignment < 2, `snap failed at ${targetZoom * 100}% (nearest alignment ${nearestAlignment}px, requested delta ${nearScreenThreshold}px)`);
+  }
+  pass("snap-guide-cleanup-ctrl-disable-and-multi-zoom-thresholds");
+
+  await selectNode(snapA);
+  await selectNode(snapB, true);
+  doc.querySelector("#group").click();
+  const beforeGroupDuplicate = nodeCount();
+  const groupPoint = center(nodeElement(snapA));
+  pointer("pointerdown", nodeElement(snapA), { ...groupPoint, altKey: true });
+  pointer("pointermove", shell, { clientX: groupPoint.clientX + 70, clientY: groupPoint.clientY + 58, altKey: true });
+  pointer("pointerup", shell, { clientX: groupPoint.clientX + 70, clientY: groupPoint.clientY + 58, altKey: true });
+  assert(nodeCount() === beforeGroupDuplicate + 2, "group Alt+drag did not duplicate all selected nodes");
+  doc.querySelector("#undo").click();
+  assert(nodeCount() === beforeGroupDuplicate, "undo did not remove group Alt+drag copy");
+  doc.querySelector("#redo").click();
+  assert(nodeCount() === beforeGroupDuplicate + 2, "redo did not restore group Alt+drag copy");
+  pass("group-multiselect-alt-drag-undo-redo");
+
+  doc.querySelector("#fit").click();
+  const connectorSource = root;
+  const connectorTarget = clickTargets.right;
+  const reattachFrom = clickTargets.top;
+  const reattachTo = clickTargets.bottom;
+  doc.querySelector('[data-tool="connector"]').click();
+  pointer("pointerdown", nodeElement(connectorSource), center(nodeElement(connectorSource)));
+  pointer("pointermove", shell, center(nodeElement(connectorTarget)));
+  assert(doc.querySelector("#node-layer .connection-target"), "manual connector target did not highlight");
+  pointer("pointerup", shell, center(nodeElement(connectorTarget)));
+  const connectorId = selectedId();
+  assert(connectorId && nodeElement(connectorId).classList.contains("whiteboard-connector"), "manual connector was not created");
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await commitText("严格测试连线");
+  let fromHandle = doc.querySelector('[data-connector-end="from"]');
+  pointer("pointerdown", fromHandle, center(fromHandle));
+  pointer("pointermove", shell, center(nodeElement(reattachFrom)));
+  const actualFromTarget = doc.querySelector("#node-layer .connection-target")?.dataset.nodeId;
+  assert(actualFromTarget, "from endpoint target did not highlight");
+  pointer("pointerup", shell, center(nodeElement(reattachFrom)));
+  let toHandle = doc.querySelector('[data-connector-end="to"]');
+  pointer("pointerdown", toHandle, center(toHandle));
+  pointer("pointermove", shell, center(nodeElement(reattachTo)));
+  const actualToTarget = doc.querySelector("#node-layer .connection-target")?.dataset.nodeId;
+  assert(actualToTarget, "to endpoint target did not highlight");
+  pointer("pointerup", shell, center(nodeElement(reattachTo)));
+  fromHandle = doc.querySelector('[data-connector-end="from"]');
+  const blankPoint = { clientX: 1120, clientY: 650 };
+  pointer("pointerdown", fromHandle, center(fromHandle));
+  pointer("pointermove", shell, blankPoint);
+  pointer("pointerup", shell, blankPoint);
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+  await wait(900);
+  const savedBeforeReload = await fetch("/assets/test.board.json", { cache: "no-store" }).then((response) => response.json());
+  const savedConnector = savedBeforeReload.nodes.find((node) => node.id === connectorId);
+  assert(savedConnector?.text === "严格测试连线", "connector label was not saved");
+  assert(!savedConnector.from.nodeId && Number.isFinite(savedConnector.from.x), "free endpoint was not saved");
+  assert(savedConnector.to.nodeId === actualToTarget, "reattached endpoint was not saved");
+  frame.src += "&reload=1";
+  await new Promise((resolve) => frame.addEventListener("load", resolve, { once: true }));
+  await wait(250);
+  doc = frame.contentDocument; win = frame.contentWindow; shell = doc.querySelector("#canvas-shell"); shell.setPointerCapture = () => {};
+  assert(nodeElement(connectorId)?.querySelector(".connector-label")?.textContent === "严格测试连线", "connector label did not survive reload");
+  await selectNode(connectorId);
+  assert(doc.querySelectorAll("[data-connector-end]").length === 2, "connector endpoint handles did not survive reload");
+  pass("both-endpoint-reconnect-free-end-save-reload");
+
+  await selectNode(root);
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  textInput().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+  textInput().textContent = "中文输入法组合输入";
+  textInput().dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "中文输入法组合输入" }));
+  textInput().dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", data: "中文输入法组合输入", isComposing: true }));
+  textInput().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "中文输入法组合输入" }));
+  textInput().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+  assert(nodeElement(root).querySelector(".whiteboard-node-text").textContent === "中文输入法组合输入", "IME composition text did not commit");
+  frame.style.width = "390px";
+  await wait(100);
+  assert(getComputedStyle(doc.querySelector("#main-toolbar")).flexDirection === "row", "mobile toolbar layout did not activate");
+  doc.querySelector('[data-tool="hand"]').click();
+  const beforeTouch = doc.querySelector("#viewport-layer").getAttribute("transform");
+  pointer("pointerdown", shell, { pointerType: "touch", clientX: 260, clientY: 520, pointerId: 977 });
+  pointer("pointermove", shell, { pointerType: "touch", clientX: 300, clientY: 555, pointerId: 977 });
+  pointer("pointerup", shell, { pointerType: "touch", clientX: 300, clientY: 555, pointerId: 977 });
+  assert(doc.querySelector("#viewport-layer").getAttribute("transform") !== beforeTouch, "touch pointer did not pan mobile canvas");
+  pass("mobile-touch-and-ime-composition");
+
+  metrics.finalNodes = nodeCount();
+  output.textContent = `WHITEBOARD_STRICT_BROWSER_PASSED: ${checks.join(", ")}`;
+  await fetch("/strict-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "passed", checks, metrics }) });
+} catch (error) {
+  output.textContent = `WHITEBOARD_STRICT_BROWSER_FAILED: ${error.stack || error}`;
+  await fetch("/strict-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "failed", checks, metrics, error: String(error.stack || error) }) });
+}
+</script></body></html>

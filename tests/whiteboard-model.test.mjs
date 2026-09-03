@@ -29,6 +29,7 @@ import {
   nodesInMarquee
 } from "../static/whiteboard-layout.js";
 import { instantiateWhiteboardTemplate } from "../static/whiteboard-templates.js";
+import { connectableNodeAtPoint, snapWhiteboardMove } from "../static/whiteboard-interactions.js";
 
 function sampleBoard() {
   const documentValue = createWhiteboardDocument("产品流程");
@@ -37,7 +38,8 @@ function sampleBoard() {
   const edge = createWhiteboardNode("connector", {
     id: "edge",
     from: { nodeId: start.id, anchor: "right" },
-    to: { nodeId: end.id, anchor: "left" }
+    to: { nodeId: end.id, anchor: "left" },
+    text: "流转"
   });
   documentValue.nodes.push(start, edge, end);
   return documentValue;
@@ -116,6 +118,44 @@ test("alignment, distribution, auto layout, and marquee selection are determinis
   assert.deepEqual(nodesInMarquee(documentValue, { x: -5, y: -5, right: 120, bottom: 60 }), ["a"]);
 });
 
+test("drag snapping aligns geometry and detects equal spacing at a screen-consistent threshold", () => {
+  const documentValue = createWhiteboardDocument("吸附测试");
+  const left = createWhiteboardNode("rect", { id: "left", x: 0, y: 100, width: 100, height: 80 });
+  const moving = createWhiteboardNode("rect", { id: "moving", x: 195, y: 104, width: 100, height: 80 });
+  const right = createWhiteboardNode("rect", { id: "right", x: 390, y: 100, width: 100, height: 80 });
+  documentValue.nodes.push(left, moving, right);
+  const snapped = snapWhiteboardMove(documentValue, [moving.id], documentBounds(documentValue, [moving.id]), 0, 0, 1);
+  assert.equal(snapped.dx, 0);
+  assert.equal(snapped.dy, -4);
+  assert.ok(snapped.indicators.some((indicator) => indicator.type === "gap-x"));
+  assert.ok(snapped.indicators.some((indicator) => indicator.type === "align-y"));
+  const unsnapped = snapWhiteboardMove(documentValue, [moving.id], documentBounds(documentValue, [moving.id]), 0, 20, 2);
+  assert.equal(unsnapped.dy, 20);
+});
+
+test("snapping threshold stays screen-consistent at 50%, 100%, and 200% zoom", () => {
+  const documentValue = createWhiteboardDocument("缩放吸附阈值");
+  const fixed = createWhiteboardNode("rect", { id: "fixed", x: 0, y: 100, width: 100, height: 80 });
+  const moving = createWhiteboardNode("rect", { id: "moving", x: 180, y: 106, width: 100, height: 80 });
+  documentValue.nodes.push(fixed, moving);
+  const bounds = documentBounds(documentValue, [moving.id]);
+  assert.equal(snapWhiteboardMove(documentValue, [moving.id], bounds, 0, 0, 0.5).dy, -6);
+  assert.equal(snapWhiteboardMove(documentValue, [moving.id], bounds, 0, 0, 1).dy, -6);
+  assert.equal(snapWhiteboardMove(documentValue, [moving.id], bounds, 0, 0, 2).dy, 0);
+});
+
+test("connector target detection prefers the topmost connectable shape", () => {
+  const documentValue = createWhiteboardDocument("连接测试");
+  documentValue.nodes.push(
+    createWhiteboardNode("rect", { id: "under", x: 20, y: 20, width: 100, height: 80 }),
+    createWhiteboardNode("ellipse", { id: "top", x: 30, y: 30, width: 100, height: 80 }),
+    createWhiteboardNode("frame", { id: "frame", x: 0, y: 0, width: 200, height: 160 })
+  );
+  assert.equal(connectableNodeAtPoint(documentValue, { x: 60, y: 60 })?.id, "top");
+  assert.equal(connectableNodeAtPoint(documentValue, { x: 60, y: 60 }, ["top"])?.id, "under");
+  assert.equal(connectableNodeAtPoint(documentValue, { x: 400, y: 400 }), null);
+});
+
 test("built-in whiteboard templates contain valid connected editable nodes", () => {
   for (const id of ["flow", "brainstorm", "plan"]) {
     const nodes = instantiateWhiteboardTemplate(id, { x: 100, y: 100 });
@@ -155,6 +195,7 @@ test("SVG export includes frames, shapes, text, connectors, and arrow definition
   assert.match(svg, /<text[^>]*><tspan/);
   assert.doesNotMatch(svg, /<foreignObject/);
   assert.match(svg, /marker-end=/);
+  assert.match(svg, /流转/);
   assert.ok(svg.indexOf(frame.text) < svg.indexOf("开始"));
 });
 
@@ -185,10 +226,11 @@ test("large practical whiteboards remain inside the model performance budget", (
 });
 
 test("whiteboard editor is packaged through the existing plugin framework", async () => {
-  const [html, editor, renderer, plugin, previews, embed, packageScript] = await Promise.all([
+  const [html, editor, renderer, interactions, plugin, previews, embed, packageScript] = await Promise.all([
     readFile(new URL("../static/whiteboard-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/whiteboard-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/whiteboard-renderer.js", import.meta.url), "utf8"),
+    readFile(new URL("../static/whiteboard-interactions.js", import.meta.url), "utf8"),
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/preview-builders.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/embed-manager.ts", import.meta.url), "utf8"),
@@ -201,6 +243,7 @@ test("whiteboard editor is packaged through the existing plugin framework", asyn
   assert.match(packageScript, /whiteboard-editor\.html/);
   assert.match(packageScript, /whiteboard-model\.js/);
   assert.match(packageScript, /whiteboard-layout\.js/);
+  assert.match(packageScript, /whiteboard-interactions\.js/);
   assert.match(packageScript, /whiteboard-templates\.js/);
   assert.match(html, /id="main-toolbar"/);
   assert.match(html, /id="selection-toolbar"/);
@@ -216,6 +259,7 @@ test("whiteboard editor is packaged through the existing plugin framework", asyn
   assert.match(editor, /buildWhiteboardSvg/);
   assert.match(editor, /nodesInMarquee/);
   assert.match(editor, /groupSelection/);
+  assert.match(interactions, /snapWhiteboardMove/);
   assert.doesNotMatch(editor, /else \{\s*const node = createNodeAt\("rect", screenToWorld\(event\.clientX/);
   assert.match(renderer, /data-quick-anchor/);
 });

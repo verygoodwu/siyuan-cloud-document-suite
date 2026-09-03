@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 
 const base = process.env.SIYUAN_BASE_URL || "http://127.0.0.1:6806";
 const packageName = "siyuan-cloud-document-suite";
-const expectedVersion = "2.1.3";
+const expectedVersion = "2.1.4";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const files = (await readdir("dist", { withFileTypes: true }))
   .filter((entry) => entry.isFile() && entry.name !== "package.zip")
@@ -38,7 +38,7 @@ const petalsResponse = await fetch(`${base}/api/petal/loadPetals`, {
 });
 const petals = await petalsResponse.json();
 const plugin = petals.data?.find((item) => item.name === packageName);
-const staticAssets = ["whiteboard-editor.html", "whiteboard-editor.js", "whiteboard-model.js", "whiteboard-renderer.js", "whiteboard-layout.js", "whiteboard-templates.js"];
+const staticAssets = ["whiteboard-editor.html", "whiteboard-editor.js", "whiteboard-model.js", "whiteboard-renderer.js", "whiteboard-layout.js", "whiteboard-interactions.js", "whiteboard-templates.js"];
 const staticChecks = [];
 for (const name of staticAssets) {
   const response = await fetch(`${base}/plugins/${packageName}/${name}?v=${expectedVersion}`, {

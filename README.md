@@ -6,6 +6,7 @@ Import, preview, create, edit, and export office documents, mind maps, and white
 
 ## Changelog (short version)
 
+- **v2.1.4**: Completes two whiteboard interaction batches: click-or-drag four-way quick create, a 5 px drag threshold, collision-aware contextual toolbar, natural pan/zoom, alignment and equal-gap snapping, connector target highlighting and endpoint reconnection, connector labels, Alt-drag duplication, and zoom-to-selection. Existing board files remain compatible.
 - **v2.1.3**: First public whiteboard release, including all capabilities developed in v2.1.0–v2.1.2. Splits the text editor into a centered overlay and native editable inner element, fixing unreliable empty-node input, alignment, and duplicate double-click initialization. The whiteboard is isolated from existing spreadsheet, mind-map, Word, and import flows, with real-browser input and persistence coverage.
 - **v2.1.2 (local development)**: Completes whiteboard text-entry behavior for immediate editing after creation, double-click, Enter/F2, and direct typing; fixes creation/edit timing and PNG export for boards containing text; and adds a full whiteboard test matrix. This build has not been pushed or submitted to the marketplace.
 - **v2.1.1 (local development)**: Fixes vertically misaligned whiteboard text editing and repeated clicks or double-clicks being misclassified as blank-canvas creation. Adds real-browser regression coverage.
@@ -47,7 +48,7 @@ Development focuses on lightweight editing experiences inside SiYuan. The next w
 - `.docx` content conversion with the original attachment retained, plus a context-menu action for creating Word documents.
 - XMind import for both modern `content.json` and legacy `content.xml` packages.
 - Live FreeMind/Freeplane `.mm` editing with draggable nodes, automatic SiYuan asset persistence, and standards-compatible `.mm` export.
-- Editable whiteboards with text, sticky notes, shapes, images, freehand drawing, node-bound connectors, zoom/pan, quick creation, undo/redo, automatic SiYuan persistence, and SVG/PNG export.
+- Editable whiteboards with text, sticky notes, shapes, images, freehand drawing, labeled reconnectable connectors, snapping, click-or-drag quick creation, zoom/pan and zoom-to-selection, Alt-drag duplication, undo/redo, automatic SiYuan persistence, and SVG/PNG export.
 - Context-menu actions on documents and notebooks for creating whiteboards, mind maps, Word documents, and Excel workbooks.
 - Collision-safe naming and sequential multi-file imports; one failed file does not stop the remaining queue.
 

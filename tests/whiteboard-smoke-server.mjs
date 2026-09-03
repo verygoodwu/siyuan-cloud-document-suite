@@ -16,6 +16,9 @@ const initial = {
 const initialBytes = () => Buffer.from(`${JSON.stringify(initial, null, 2)}\n`);
 let remote = initialBytes();
 let smokeResult = { status: "not-run" };
+let strictResult = { status: "not-run" };
+let performanceResult = { status: "not-run" };
+let stressResult = { status: "not-run" };
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -43,6 +46,47 @@ function multipartFile(body, contentType) {
   return body.subarray(dataStart, dataEnd);
 }
 
+function largeWhiteboard(count, title = "白板性能测试") {
+  const columns = Math.ceil(Math.sqrt(count));
+  return Buffer.from(`${JSON.stringify({
+    ...initial,
+    title,
+    viewport: { x: 80, y: 80, zoom: 0.2 },
+    nodes: Array.from({ length: count }, (_, index) => ({
+      id: `perf-${index}`,
+      type: "rect",
+      x: (index % columns) * 150,
+      y: Math.floor(index / columns) * 100,
+      width: 120,
+      height: 64,
+      text: `节点 ${index + 1}`,
+      style: { fill: "#ffffff", stroke: "#4e83fd", textColor: "#1f2329", fontSize: 16, bold: false }
+    }))
+  }, null, 2)}\n`);
+}
+
+async function serveTest(response, name) {
+  const content = await readFile(resolve("tests", name), "utf8");
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  response.end(content);
+}
+
+async function resultEndpoint(request, response, current, update) {
+  if (request.method === "POST") {
+    const result = JSON.parse((await collect(request)).toString("utf8"));
+    update(result);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ code: 0 }));
+    return true;
+  }
+  if (request.method === "GET") {
+    response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end(JSON.stringify(current()));
+    return true;
+  }
+  return false;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
@@ -50,26 +94,43 @@ const server = createServer(async (request, response) => {
       await collect(request);
       remote = initialBytes();
       smokeResult = { status: "not-run" };
+      strictResult = { status: "not-run" };
+      performanceResult = { status: "not-run" };
+      stressResult = { status: "not-run" };
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ code: 0 }));
       return;
     }
     if (url.pathname === "/smoke-runner") {
-      const content = await readFile(resolve("tests", "whiteboard-browser-smoke.html"), "utf8");
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      response.end(content);
+      await serveTest(response, "whiteboard-browser-smoke.html");
       return;
     }
     if (url.pathname === "/full-test") {
-      const content = await readFile(resolve("tests", "whiteboard-full-browser.html"), "utf8");
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      response.end(content);
+      await serveTest(response, "whiteboard-full-browser.html");
       return;
     }
     if (url.pathname === "/export-test") {
-      const content = await readFile(resolve("tests", "whiteboard-export-browser.html"), "utf8");
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      response.end(content);
+      await serveTest(response, "whiteboard-export-browser.html");
+      return;
+    }
+    if (url.pathname === "/strict-test") {
+      await serveTest(response, "whiteboard-strict-browser.html");
+      return;
+    }
+    if (url.pathname === "/performance-test") {
+      await serveTest(response, "whiteboard-performance-browser.html");
+      return;
+    }
+    if (url.pathname === "/stress-test") {
+      await serveTest(response, "whiteboard-stress-browser.html");
+      return;
+    }
+    if (url.pathname === "/test-seed-large" && request.method === "POST") {
+      const payload = JSON.parse((await collect(request)).toString("utf8") || "{}");
+      const count = Math.max(1, Math.min(5000, Number(payload.count) || 2000));
+      remote = largeWhiteboard(count);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: 0, count }));
       return;
     }
     if (url.pathname === "/smoke-result" && request.method === "POST") {
@@ -94,6 +155,9 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify(smokeResult));
       return;
     }
+    if (url.pathname === "/strict-result" && await resultEndpoint(request, response, () => strictResult, (value) => { strictResult = value; })) return;
+    if (url.pathname === "/performance-result" && await resultEndpoint(request, response, () => performanceResult, (value) => { performanceResult = value; })) return;
+    if (url.pathname === "/stress-result" && await resultEndpoint(request, response, () => stressResult, (value) => { stressResult = value; })) return;
     if (url.pathname === "/assets/test.board.json" && request.method === "GET") {
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(remote);
@@ -122,7 +186,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     const content = (await readFile(file, "utf8")).replaceAll("__PLUGIN_VERSION__", "smoke");
-    response.writeHead(200, { "content-type": contentTypes[extname(file)] || "text/plain; charset=utf-8" });
+    response.writeHead(200, { "content-type": contentTypes[extname(file)] || "text/plain; charset=utf-8", "cache-control": "no-store" });
     response.end(content);
   } catch (error) {
     response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });

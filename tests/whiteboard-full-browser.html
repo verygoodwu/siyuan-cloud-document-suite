@@ -164,6 +164,24 @@ try {
   assert(Number(doc.querySelector(`[data-node-id="${rectId}"] rect`).getAttribute("width")) > oldWidth, "node resize failed");
   pass("move-resize");
 
+  await selectNode(ellipseId);
+  let thresholdNode = doc.querySelector(`[data-node-id="${ellipseId}"]`);
+  const thresholdPoint = center(thresholdNode);
+  const thresholdX = Number(thresholdNode.querySelector("ellipse").getAttribute("cx"));
+  pointer("pointerdown", thresholdNode, thresholdPoint);
+  pointer("pointermove", shell, { clientX: thresholdPoint.clientX + 3, clientY: thresholdPoint.clientY + 2 });
+  pointer("pointerup", shell, { clientX: thresholdPoint.clientX + 3, clientY: thresholdPoint.clientY + 2 });
+  assert(Number(doc.querySelector(`[data-node-id="${ellipseId}"] ellipse`).getAttribute("cx")) === thresholdX, "a small click jitter moved the node");
+  thresholdNode = doc.querySelector(`[data-node-id="${ellipseId}"]`);
+  const altPoint = center(thresholdNode);
+  const beforeAltDrag = renderedNodes().length;
+  pointer("pointerdown", thresholdNode, { ...altPoint, altKey: true });
+  pointer("pointermove", shell, { clientX: altPoint.clientX + 55, clientY: altPoint.clientY + 45, altKey: true });
+  pointer("pointerup", shell, { clientX: altPoint.clientX + 55, clientY: altPoint.clientY + 45, altKey: true });
+  await wait(30);
+  assert(renderedNodes().length === beforeAltDrag + 1, "Alt+drag did not duplicate exactly once");
+  pass("drag-threshold-and-alt-duplicate");
+
   const beforeManualConnector = doc.querySelectorAll("#node-layer .whiteboard-connector").length;
   doc.querySelector('[data-tool="connector"]').click();
   const manualSource = doc.querySelector(`[data-node-id="${rectId}"]`);
@@ -181,10 +199,49 @@ try {
   assert(doc.querySelector("#node-layer .whiteboard-connector.selected path:not(.connector-hit)").getAttribute("d").includes(" C "), "connector style failed");
   pass("manual-connector-and-line-style");
 
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await wait(20);
+  assert(!textEditor().hidden && doc.activeElement === textEditorInput(), "connector label editor did not open");
+  await commitText("处理说明");
+  assert(doc.querySelector("#node-layer .whiteboard-connector.selected .connector-label")?.textContent === "处理说明", "connector label was not rendered");
+  const connectorPathBeforeReconnect = doc.querySelector("#node-layer .whiteboard-connector.selected path:not(.connector-hit)").getAttribute("d");
+  const fromHandle = doc.querySelector('[data-connector-end="from"]');
+  const reconnectTarget = doc.querySelector(`[data-node-id="${diamondId}"]`);
+  pointer("pointerdown", fromHandle, center(fromHandle));
+  pointer("pointermove", shell, center(reconnectTarget));
+  assert(reconnectTarget.classList.contains("connection-target"), "connector target did not highlight");
+  pointer("pointerup", shell, center(reconnectTarget));
+  await wait(30);
+  assert(doc.querySelector("#node-layer .whiteboard-connector.selected path:not(.connector-hit)").getAttribute("d") !== connectorPathBeforeReconnect, "connector endpoint was not reattached");
+  pass("connector-label-highlight-and-reattach");
+
+  await selectNode(rectId);
+  const topQuick = doc.querySelector('[data-quick-anchor="top"]');
+  const toolbarRect = doc.querySelector('#selection-toolbar').getBoundingClientRect();
+  const topQuickRect = topQuick.getBoundingClientRect();
+  const overlaps = toolbarRect.left < topQuickRect.right && toolbarRect.right > topQuickRect.left
+    && toolbarRect.top < topQuickRect.bottom && toolbarRect.bottom > topQuickRect.top;
+  assert(!overlaps, "selection toolbar covers the top quick-create button");
+  const sourceBeforeTop = doc.querySelector(`[data-node-id="${rectId}"]`).getBoundingClientRect();
+  const beforeTopQuick = renderedNodes().length;
+  const beforeTopConnectors = doc.querySelectorAll("#node-layer .whiteboard-connector").length;
+  pointer("pointerdown", topQuick, center(topQuick));
+  pointer("pointerup", shell, center(topQuick));
+  await wait(40);
+  assert(renderedNodes().length === beforeTopQuick + 2 && !textEditor().hidden, "top quick create did not add node and connector");
+  const topTargetId = selectedId();
+  await commitText("上方节点");
+  const topTarget = doc.querySelector(`[data-node-id="${topTargetId}"]`).getBoundingClientRect();
+  assert(topTarget.bottom < sourceBeforeTop.top, "top quick-create node was not placed above the source");
+  assert(doc.querySelectorAll("#node-layer .whiteboard-connector").length === beforeTopConnectors + 1, "top quick-create connector is missing");
+  assert(doc.querySelector('#selection-toolbar').dataset.placement === "below", "toolbar did not move below a node near the canvas top");
+  pass("top-quick-create-visible-and-connected");
+
   await selectNode(rectId);
   const beforeQuick = renderedNodes().length;
   const quick = doc.querySelector('[data-quick-anchor="right"]');
   pointer("pointerdown", quick, center(quick));
+  pointer("pointerup", shell, center(quick));
   await wait(40);
   assert(renderedNodes().length === beforeQuick + 2 && !textEditor().hidden, "quick create did not add node and connector");
   await commitText("快捷节点");
@@ -200,6 +257,28 @@ try {
   assert(renderedNodes().length === beforeShiftTab + 2, "Shift+Tab quick create failed");
   await commitText("左侧节点");
   pass("quick-tab-connectors");
+
+  await selectNode(rectId);
+  const bottomQuick = doc.querySelector('[data-quick-anchor="bottom"]');
+  const bottomStart = center(bottomQuick);
+  const bottomDrop = { clientX: bottomStart.clientX + 135, clientY: bottomStart.clientY + 165 };
+  const beforeDraggedQuick = renderedNodes().length;
+  pointer("pointerdown", bottomQuick, bottomStart);
+  pointer("pointermove", shell, bottomDrop);
+  assert(doc.querySelector("#draft-layer rect"), "dragged quick-create did not show a node preview");
+  pointer("pointerup", shell, bottomDrop);
+  await wait(30);
+  assert(renderedNodes().length === beforeDraggedQuick + 2 && !textEditor().hidden, "dragged quick-create did not create a connected node");
+  const draggedTarget = doc.querySelector(`[data-node-id="${selectedId()}"]`).getBoundingClientRect();
+  assert(Math.abs(draggedTarget.left + draggedTarget.width / 2 - bottomDrop.clientX) < 8, "dragged quick-create ignored the drop position");
+  await commitText("拖动创建");
+  await selectNode(rectId);
+  const beforeAltDown = renderedNodes().length;
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }));
+  await wait(30);
+  assert(renderedNodes().length === beforeAltDown + 2 && !textEditor().hidden, "Alt+Down quick-create failed");
+  await commitText("下方节点");
+  pass("dragged-and-four-direction-quick-create");
 
   await selectNode(rectId);
   const fill = doc.querySelector("#fill-color");
@@ -302,11 +381,21 @@ try {
   doc.querySelector("#zoom-in").click();
   assert(doc.querySelector("#zoom-value").textContent !== zoomBefore, "zoom in failed");
   doc.querySelector("#zoom-out").click();
+  const zoomBeforePlainWheel = doc.querySelector("#zoom-value").textContent;
+  const transformBeforePlainWheel = doc.querySelector("#viewport-layer").getAttribute("transform");
+  shell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 80, clientX: 600, clientY: 360 }));
+  assert(doc.querySelector("#zoom-value").textContent === zoomBeforePlainWheel, "plain wheel unexpectedly zoomed the canvas");
+  assert(doc.querySelector("#viewport-layer").getAttribute("transform") !== transformBeforePlainWheel, "plain wheel did not pan the canvas");
   const zoomBeforeWheel = doc.querySelector("#zoom-value").textContent;
   shell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -120, clientX: 600, clientY: 360 }));
   assert(doc.querySelector("#zoom-value").textContent !== zoomBeforeWheel, "wheel zoom failed");
+  await selectNode(rectId);
+  doc.querySelector("#zoom-selection").click();
+  assert(Number.parseInt(doc.querySelector("#zoom-value").textContent, 10) > 100, "zoom to selection did not focus the selected node");
   doc.querySelector("#fit").click();
-  pass("pan-button-wheel-zoom-fit");
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+  pass("pan-wheel-zoom-fit-selection");
 
   const downloads = [];
   const originalAnchorClick = win.HTMLAnchorElement.prototype.click;

@@ -157,7 +157,38 @@ function renderConnector(documentValue, node) {
     "vector-effect": "non-scaling-stroke",
     "pointer-events": "none"
   }));
+  if (node.text) {
+    const from = endpointPosition(documentValue, node.from);
+    const to = endpointPosition(documentValue, node.to, from);
+    const x = (from.x + to.x) / 2;
+    const y = (from.y + to.y) / 2;
+    const label = svgElement("text", {
+      class: "connector-label",
+      x,
+      y,
+      fill: node.style.textColor,
+      "font-size": node.style.fontSize,
+      "font-weight": node.style.fontWeight,
+      "text-anchor": "middle",
+      "dominant-baseline": "middle",
+      "paint-order": "stroke",
+      stroke: "var(--board-bg)",
+      "stroke-width": 6,
+      "stroke-linejoin": "round",
+      "pointer-events": "none"
+    });
+    label.textContent = node.text;
+    group.append(label);
+  }
   return group;
+}
+
+function renderNode(documentValue, node) {
+  return node.type === "connector"
+    ? renderConnector(documentValue, node)
+    : node.type === "freehand"
+      ? renderFreehand(node)
+      : renderShape(node);
 }
 
 export function renderWhiteboard(documentValue, nodeLayer, selectedIds = new Set()) {
@@ -168,13 +199,28 @@ export function renderWhiteboard(documentValue, nodeLayer, selectedIds = new Set
     ...documentValue.nodes.filter((node) => !["connector", "frame"].includes(node.type))
   ];
   for (const node of ordered) {
-    const rendered = node.type === "connector"
-      ? renderConnector(documentValue, node)
-      : node.type === "freehand"
-        ? renderFreehand(node)
-        : renderShape(node);
+    const rendered = renderNode(documentValue, node);
     rendered.classList.toggle("selected", selectedIds.has(node.id));
     nodeLayer.append(rendered);
+  }
+}
+
+export function renderWhiteboardNodes(documentValue, nodeLayer, nodeIds, selectedIds = new Set()) {
+  const requested = new Set(nodeIds);
+  for (const connector of documentValue.nodes.filter((node) => node.type === "connector")) {
+    if (requested.has(connector.from?.nodeId) || requested.has(connector.to?.nodeId)) requested.add(connector.id);
+  }
+  for (const id of requested) {
+    const node = documentValue.nodes.find((item) => item.id === id);
+    const existing = nodeLayer.querySelector(`[data-node-id="${CSS.escape(id)}"]`);
+    if (!node) {
+      existing?.remove();
+      continue;
+    }
+    const rendered = renderNode(documentValue, node);
+    rendered.classList.toggle("selected", selectedIds.has(node.id));
+    if (existing) existing.replaceWith(rendered);
+    else nodeLayer.append(rendered);
   }
 }
 
@@ -210,6 +256,25 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
     "pointer-events": "none"
   });
   selectionLayer.append(outline);
+  if (selected.length === 0 && selectedConnectors.length === 1) {
+    const connector = selectedConnectors[0];
+    for (const [end, point] of [
+      ["from", endpointPosition(documentValue, connector.from)],
+      ["to", endpointPosition(documentValue, connector.to)]
+    ]) {
+      selectionLayer.append(svgElement("circle", {
+        class: "connector-end-handle",
+        "data-connector-end": end,
+        cx: point.x,
+        cy: point.y,
+        r: 6,
+        fill: "var(--board-surface)",
+        stroke: "#3370ff",
+        "stroke-width": 2,
+        "vector-effect": "non-scaling-stroke"
+      }));
+    }
+  }
   if (selected.length === 1 && selectedConnectors.length === 0 && selected[0].type !== "freehand") {
     for (const [handle, x, y, cursor] of [
       ["nw", bounds.x - 4, bounds.y - 4, "nwse-resize"],
@@ -243,8 +308,10 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
           "data-quick-anchor": anchor,
           transform: `translate(${x} ${y})`
         });
-        quick.append(svgElement("circle", { r: 10, fill: "#3370ff" }));
+        quick.append(svgElement("circle", { class: "quick-create-hit", r: 16, fill: "transparent" }));
+        quick.append(svgElement("circle", { class: "quick-create-dot", r: 5, fill: "var(--board-surface)", stroke: "#3370ff", "stroke-width": 2, "vector-effect": "non-scaling-stroke" }));
         quick.append(svgElement("path", {
+          class: "quick-create-plus",
           d: "M -4 0 H 4 M 0 -4 V 4",
           stroke: "#fff",
           "stroke-width": 1.8,
@@ -300,7 +367,10 @@ function exportText(node) {
 
 function exportNode(documentValue, node, offsetX, offsetY) {
   if (node.type === "connector") {
-    return `<path d="${escapeXml(connectorPath(documentValue, node))}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}"${node.endArrow === "none" ? "" : " marker-end=\"url(#arrow)\""}/>`;
+    const from = endpointPosition(documentValue, node.from);
+    const to = endpointPosition(documentValue, node.to, from);
+    const label = node.text ? `<text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2}" text-anchor="middle" dominant-baseline="middle" fill="${escapeXml(node.style.textColor)}" font-family="system-ui, sans-serif" font-size="${node.style.fontSize}" font-weight="${node.style.fontWeight}" paint-order="stroke" stroke="#ffffff" stroke-width="6" stroke-linejoin="round">${escapeXml(node.text)}</text>` : "";
+    return `<g><path d="${escapeXml(connectorPath(documentValue, node))}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}"${node.endArrow === "none" ? "" : " marker-end=\"url(#arrow)\""}/>${label}</g>`;
   }
   if (node.type === "freehand") return `<path d="${escapeXml(freehandPath(node.points))}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
   const transform = node.rotation ? ` transform="rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})"` : "";
