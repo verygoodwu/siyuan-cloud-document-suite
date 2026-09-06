@@ -4,7 +4,7 @@ import { stripKnownTextResponseInjection } from "../static/siyuan-file-store.js"
 
 const base = process.env.SIYUAN_BASE_URL || "http://127.0.0.1:6806";
 const packageName = "siyuan-cloud-document-suite";
-const expectedVersion = "2.1.11";
+const expectedVersion = "2.1.12";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const files = (await readdir("dist", { withFileTypes: true }))
   .filter((entry) => entry.isFile() && entry.name !== "package.zip")

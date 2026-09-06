@@ -9,7 +9,7 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 
 ![Feature preview](preview.png)
 
-## What's new in v2.1.11
+## What's new in v2.1.12
 
 - Adds real TXT/HTML and common source/configuration file editing while keeping original attachment formats.
 - Adds a lightweight Chromium PDF reader and SiYuan-style direct PDF export for plugin-created documents.
@@ -17,10 +17,11 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 - Unifies shortcuts, view restoration, save feedback, recovery downloads, and narrow-window layouts across editors.
 - Adds NAS-safe per-kernel edit leases, two-phase document creation, byte verification, and explicit 404 recovery without synchronized debug files.
 
-This public release includes the work developed in v2.1.5–v2.1.11. See the [complete release history](./RELEASE_NOTES.md) for details.
+This public release includes the work developed in v2.1.5–v2.1.12. See the [complete release history](./RELEASE_NOTES.md) for details.
 
 ## Changelog (short version)
 
+- **v2.1.12**: Resolves the mind-map editor's versioned submodule URLs during packaging, preventing desktop and NAS browsers from reusing stale shared modules after an update. Includes all v2.1.11 features.
 - **v2.1.11**: Adds non-synchronized edit leases shared by browser sessions on one NAS/Linux/Docker kernel, byte-verifies uploaded assets, and marks plugin documents through initializing/ready creation phases. Verified browser backups can explicitly restore a missing 404 asset, while diagnostics no longer update the synchronized `drop-debug.json` file. This release also publishes the text editor, PDF workflow, type-aware exports, and unified editor experience developed in v2.1.5–v2.1.10.
 - **v2.1.10 (local development)**: Replaces the automatic Windows print dialog for document PDF export with a SiYuan-style PDF preview and Electron `printToPDF` flow. Desktop export now supports page size, margins, scale, landscape, embedded resources, title, subdocument, watermark, and pagination settings.
 - **v2.1.9 (local development)**: Unifies shortcuts, operation feedback, and save-failure recovery across text, spreadsheet, mind-map, whiteboard, and PDF views. It restores cursor/scroll, active sheet/selection, mind-map viewport/selection, and requested PDF page; adds whiteboard node search; offers one-click undo for structural actions; and improves filenames and narrow-window toolbar behavior without new heavy dependencies.

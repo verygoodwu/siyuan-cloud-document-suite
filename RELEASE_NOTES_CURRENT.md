@@ -1,6 +1,6 @@
-# Cloud Document Suite v2.1.11
+# Cloud Document Suite v2.1.12
 
-This release publishes all work developed in v2.1.5–v2.1.11 and keeps the plugin focused on a lightweight SiYuan-native editing experience.
+This release publishes all work developed in v2.1.5–v2.1.12 and keeps the plugin focused on a lightweight SiYuan-native editing experience.
 
 ## Highlights
 
@@ -11,6 +11,7 @@ This release publishes all work developed in v2.1.5–v2.1.11 and keeps the plug
 - Prevent same-kernel browser sessions on NAS/Linux/Docker from editing the same attachment simultaneously with non-synchronized temporary leases.
 - Verify uploaded bytes, complete document creation in `initializing`/`ready` phases, and offer explicit restoration when a missing attachment has a verified browser backup.
 - Stop writing the synchronized `drop-debug.json` diagnostic file.
+- Resolve all mind-map submodule version placeholders during packaging so upgraded desktop and NAS browsers cannot reuse stale shared modules.
 
 ## Verification
 
@@ -21,9 +22,9 @@ This release publishes all work developed in v2.1.5–v2.1.11 and keeps the plug
 
 ---
 
-# 云文档套件 v2.1.11
+# 云文档套件 v2.1.12
 
-本次正式发布包含 v2.1.5–v2.1.11 开发阶段的全部功能，继续保持轻量、面向思源原生使用场景的产品定位。
+本次正式发布包含 v2.1.5–v2.1.12 开发阶段的全部功能，继续保持轻量、面向思源原生使用场景的产品定位。
 
 ## 重点更新
 
@@ -34,6 +35,7 @@ This release publishes all work developed in v2.1.5–v2.1.11 and keeps the plug
 - NAS/Linux/Docker 同一思源内核的多个浏览器页面使用非同步临时编辑锁，避免同时覆盖同一附件。
 - 新建附件执行逐字节校验，文档经过 `initializing`、`ready` 两阶段创建；附件丢失且存在浏览器安全副本时可明确恢复。
 - 停止生成会参与同步的 `drop-debug.json` 诊断文件。
+- 打包时完整替换脑图子模块版本标识，避免桌面端和 NAS 浏览器升级后继续复用旧公共模块。
 
 ## 验证结果
 

@@ -412,13 +412,14 @@ test("NAS edit leases make a second browser session read-only without sync files
 });
 
 test("plugin creation is two-phase and diagnostics stay outside synchronized data", async () => {
-  const [kernelClient, documentCreator, diagnostics, pluginSource, fileStore, editorSession] = await Promise.all([
+  const [kernelClient, documentCreator, diagnostics, pluginSource, fileStore, editorSession, packageScript] = await Promise.all([
     readFile(new URL("../src/kernel-client.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/diagnostics.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../static/siyuan-file-store.js", import.meta.url), "utf8"),
-    readFile(new URL("../static/editor-session.js", import.meta.url), "utf8")
+    readFile(new URL("../static/editor-session.js", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8")
   ]);
   assert.match(kernelClient, /await this\.verifyAsset\(assetPath, expected\)/);
   assert.match(documentCreator, /"initializing", true/);
@@ -429,6 +430,7 @@ test("plugin creation is two-phase and diagnostics stay outside synchronized dat
   assert.match(editorSession, /label: "恢复附件"/);
   assert.doesNotMatch(diagnostics, /drop-debug\.json|this\.save\(/);
   assert.doesNotMatch(pluginSource, /new Diagnostics\([^)]*saveData/);
+  assert.match(packageScript, /copyVersionedHtml\("static\/mm-editor\.js", "dist\/mm-editor\.js"\)/);
 });
 
 test("an external asset update triggers conflict protection and keeps recovery", async (context) => {
