@@ -6,7 +6,8 @@ export class EmbedManager {
     private readonly editorSelector: string,
     private readonly iframeSelector: string,
     private readonly pluginVersion: string,
-    private readonly mmVersion: string
+    private readonly mmVersion: string,
+    private readonly textVersion: string
   ) {
     this.resizeObserver = new ResizeObserver(() => this.fit());
   }
@@ -27,10 +28,33 @@ export class EmbedManager {
       if (!raw) continue;
       let url: URL;
       try { url = new URL(raw, window.location.href); } catch { continue; }
-      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet|whiteboard)-editor\.html$/i.test(url.pathname)) continue;
-      const version = /\/mm-editor\.html$/i.test(url.pathname) ? this.mmVersion : this.pluginVersion;
-      if (url.searchParams.get("v") === version) continue;
-      url.searchParams.set("v", version);
+      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm-editor|sheet-editor|whiteboard-editor|text-editor|pdf-reader)\.html$/i.test(url.pathname)) continue;
+      const version = /\/mm-editor\.html$/i.test(url.pathname)
+        ? this.mmVersion
+        : /\/text-editor\.html$/i.test(url.pathname)
+          ? this.textVersion
+          : /\/sheet-editor\.html$/i.test(url.pathname)
+            ? `${this.pluginVersion}-sheet10`
+            : /\/whiteboard-editor\.html$/i.test(url.pathname)
+              ? `${this.pluginVersion}-board4`
+              : /\/pdf-reader\.html$/i.test(url.pathname)
+                ? `${this.pluginVersion}-pdf2`
+                : this.pluginVersion;
+      let changed = false;
+      if (url.searchParams.get("v") !== version) {
+        url.searchParams.set("v", version);
+        changed = true;
+      }
+      if (!url.searchParams.get("name")) {
+        const title = frame.closest<HTMLElement>(".protyle")
+          ?.querySelector<HTMLElement>(".protyle-title__input")
+          ?.textContent?.trim();
+        if (title) {
+          url.searchParams.set("name", title);
+          changed = true;
+        }
+      }
+      if (!changed) continue;
       const next = `${url.pathname}${url.search}${url.hash}`;
       frame.setAttribute("data-src", next);
       frame.setAttribute("src", next);

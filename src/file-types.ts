@@ -22,6 +22,21 @@ export function isFreeMindFile(fileName: string): boolean {
   return /\.mm$/i.test(fileName);
 }
 
+const EDITABLE_TEXT_EXTENSIONS = new Set([
+  "txt", "text", "html", "htm", "css", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+  "json", "jsonc", "xml", "yaml", "yml", "toml", "ini", "conf", "config", "log",
+  "sql", "py", "java", "c", "h", "cpp", "hpp", "cs", "go", "rs", "sh", "bat", "ps1"
+]);
+
+export function textFileExtension(fileName: string): string | undefined {
+  const match = fileName.toLowerCase().match(/\.([^.\\/]+)$/);
+  return match && EDITABLE_TEXT_EXTENSIONS.has(match[1]) ? match[1] : undefined;
+}
+
+export function isEditableTextFile(fileName: string): boolean {
+  return Boolean(textFileExtension(fileName));
+}
+
 export function isZipContent(content: ArrayBuffer): boolean {
   const bytes = new Uint8Array(content, 0, Math.min(4, content.byteLength));
   return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;

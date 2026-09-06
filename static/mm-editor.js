@@ -1,5 +1,6 @@
 import MindElixir from "./MindElixir.js?v=right-pan-1";
-import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js";
+import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   buildOutlineRows,
   captureMindExpansion,
@@ -9,10 +10,16 @@ import {
   resolveMindShortcut,
   restoreMindExpansion,
   searchMindNodes
-} from "./mm-workspace.js";
+} from "./mm-workspace.js?v=__PLUGIN_VERSION__-workspace2";
 
 const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
+const requestedName = params.get("name")?.split(/[\\/]/).pop()?.trim() || "";
+const assetFileName = (() => {
+  if (requestedName) return requestedName;
+  try { return decodeURIComponent(String(asset || "").split("/").pop() || "脑图.mm"); }
+  catch { return String(asset || "").split("/").pop() || "脑图.mm"; }
+})();
 const status = document.querySelector("#status");
 const exportButton = document.querySelector("#export");
 const viewStyleButton = document.querySelector("#view-style");
@@ -30,6 +37,8 @@ const searchCount = document.querySelector("#search-count");
 const outlineList = document.querySelector("#outline-list");
 const storageKey = `siyuan-mm-editor:${asset}`;
 const store = new SiyuanFileStore(asset, storageKey);
+const viewSession = createEditorSession("mind", asset);
+const notice = createOperationNotice();
 let saveTimer;
 let saveInFlight = false;
 let saveAgain = false;
@@ -70,6 +79,7 @@ const zhCnMenu = {
 
 function setStatus(text) {
   status.textContent = text;
+  status.title = String(text);
   const normalized = String(text);
   status.dataset.state = normalized.includes("失败") || normalized.includes("冲突")
     ? "error"
@@ -1012,13 +1022,10 @@ function serializeMm(mind) {
 function downloadMm(mind) {
   const data = mind.getData();
   const xml = serializeMm(mind);
-  const blobUrl = URL.createObjectURL(new Blob([xml], { type: "application/xml;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = blobUrl;
-  link.download = `${data.nodeData.topic || "脑图"}.mm`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  const fileName = `${data.nodeData.topic || "脑图"}.mm`;
+  downloadBytes(new TextEncoder().encode(xml), fileName, "application/xml;charset=utf-8");
   setStatus("已导出 .mm");
+  notice.show(`已导出 ${fileName}`);
 }
 
 function parseMm(bytes) {
@@ -1042,7 +1049,7 @@ function parseMm(bytes) {
 }
 
 async function loadInitialData() {
-  const remoteData = parseMm(await store.loadRemote());
+  const remoteData = parseMm(await store.openRemote());
   const recovery = store.readRecovery();
   if (!recovery) return { value: remoteData, state: "remote" };
   if (recovery.legacy) {
@@ -1155,7 +1162,7 @@ try {
     el: "#map",
     direction: data.direction,
     newTopicName: "输入文字",
-    editable: true,
+    editable: store.canEdit(),
     contextMenu: { locale: zhCnMenu, focus: true, link: false },
     toolBar: true,
     generateMainBranch: generateFeishuMainBranch,
@@ -1165,6 +1172,8 @@ try {
     compact: false
   });
   await mind.init(data);
+  document.title = `${assetFileName} · 脑图`;
+  document.querySelector("#help").textContent = `${assetFileName}　·　Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开`;
   const nativeGetData = mind.getData.bind(mind);
   mind.getData = () => {
     const snapshot = nativeGetData();
@@ -1243,12 +1252,42 @@ try {
     }
     return nativeAddChild(target, node);
   };
+  const savedView = viewSession.read();
+  let viewTimer;
+  const saveViewState = () => {
+    clearTimeout(viewTimer);
+    viewSession.write({
+      transform: mind.map?.style?.transform || "",
+      scaleVal: Number.isFinite(Number(mind.scaleVal)) ? Number(mind.scaleVal) : 1,
+      selectedNodeId: mind.currentNode?.nodeObj?.id || ""
+    });
+  };
+  const scheduleViewState = () => {
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(saveViewState, 180);
+  };
+  const restoreSavedView = () => {
+    const hasTransform = typeof savedView.transform === "string" && savedView.transform.trim() && savedView.transform !== "none";
+    if (hasTransform) {
+      mind.map.style.transform = savedView.transform;
+      if (Number.isFinite(Number(savedView.scaleVal)) && Number(savedView.scaleVal) >= 0.1 && Number(savedView.scaleVal) <= 4) mind.scaleVal = Number(savedView.scaleVal);
+    } else {
+      mind.scaleFit();
+      mind.toCenter();
+    }
+    if (savedView.selectedNodeId) {
+      const topic = findMindTopic(mind, savedView.selectedNodeId);
+      if (topic) mind.selectNode(topic);
+    }
+    decorateNodes(mind);
+    redrawVisibleBranches();
+  };
   const fitMap = () => {
     mind.scaleFit();
     mind.toCenter();
   };
-  requestAnimationFrame(() => requestAnimationFrame(fitMap));
-  setTimeout(fitMap, 300);
+  requestAnimationFrame(() => requestAnimationFrame(restoreSavedView));
+  if (!(typeof savedView.transform === "string" && savedView.transform.trim() && savedView.transform !== "none")) setTimeout(fitMap, 300);
   scheduleMindPersistence = () => {
     clearTimeout(saveTimer);
     try {
@@ -1293,6 +1332,21 @@ try {
       pendingKeyboardAdd = undefined;
     }
     scheduleMindPersistence();
+    const operationMessages = {
+      addChild: "已添加子节点",
+      insertSibling: "已添加同级节点",
+      insertParent: "已插入父节点",
+      removeNode: "已删除节点",
+      moveUp: "已向上移动节点",
+      moveDown: "已向下移动节点",
+      toggleExpand: "已切换分支显示"
+    };
+    if (operationMessages[operation?.name]) {
+      notice.show(operationMessages[operation.name], {
+        duration: 3200,
+        actions: [{ label: "撤销", run: () => mind.undo() }]
+      });
+    }
     if (keyboardAddInProgress) {
       decorateNodes(mind);
       // The fast keyboard path intentionally skips a full refresh; it still
@@ -1308,10 +1362,12 @@ try {
   mind.bus.addListener("selectNodes", () => {
     updateToolbar(mind);
     queueWorkspaceSelectionSync(mind, true);
+    scheduleViewState();
   });
   mind.bus.addListener("unselectNodes", () => {
     updateToolbar(mind);
     queueWorkspaceSelectionSync(mind);
+    scheduleViewState();
   });
   nodeTools.addEventListener("pointerdown", (event) => event.stopPropagation());
   nodeTools.addEventListener("click", async (event) => {
@@ -1373,7 +1429,7 @@ try {
     if ((event.ctrlKey || event.metaKey) && key === "s") {
       event.preventDefault();
       if (isTextEditingTarget(event.target)) event.target.blur?.();
-      void persistMind(false);
+      void persistMind(false, true);
       return;
     }
     const keyboardCreateKey = key === "tab" || event.code === "Tab" || event.keyCode === 9
@@ -1509,7 +1565,7 @@ try {
   observer.observe(document.querySelector("#map"), { childList: true, subtree: true });
   decorateNodes(mind);
   renderWorkspace(mind);
-  async function persistMind(force) {
+  async function persistMind(force, notify = false) {
     if (saveInFlight) {
       saveAgain = true;
       return;
@@ -1524,13 +1580,30 @@ try {
       setStatus(saved.unchanged
         ? `内容已保存 ${savedAt}`
         : `已写入思源附件 ${savedAt}`);
+      if (notify) notice.show("已保存到思源附件");
     } catch (error) {
       console.error(error);
       if (error instanceof SaveConflictError) {
         setStatus("保存冲突：思源附件已有新版本，本机修改已保留");
         overwriteConflict = confirm("思源附件已在其他页面或设备发生变化。确定用当前脑图覆盖远端版本吗？");
       } else {
-        setStatus(`保存失败（本机修改已保留）：${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`保存失败（本机修改已保留）：${message}`);
+        notice.show(`保存失败：${message}`, {
+          tone: "error",
+          duration: 0,
+          actions: [
+            { label: "重试", run: () => void persistMind(false, true) },
+            {
+              label: "下载恢复副本",
+              run: () => downloadBytes(
+                new TextEncoder().encode(serializeMm(mind)),
+                assetFileName.replace(/\.mm$/i, "") + ".recovery.mm",
+                "application/xml;charset=utf-8"
+              )
+            }
+          ]
+        });
       }
     } finally {
       saveInFlight = false;
@@ -1544,7 +1617,21 @@ try {
     }
   }
   exportButton.addEventListener("click", () => downloadMm(mind));
-  if (initialState === "conflict") {
+  document.querySelector("#map").addEventListener("wheel", scheduleViewState, { passive: true });
+  document.querySelector("#map").addEventListener("pointerup", scheduleViewState, { passive: true });
+  window.addEventListener("pagehide", saveViewState);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && !saveInFlight && store.canEdit()) void persistMind(false);
+  });
+  window.addEventListener("message", (event) => {
+    const request = event.data;
+    if (event.origin !== location.origin || request?.type !== "siyuan-cloud-document-export") return;
+    if (request.asset === asset && request.format === "mm") downloadMm(mind);
+  });
+  if (!store.canEdit()) {
+    nodeTools?.querySelectorAll("button,select,input").forEach((control) => { control.disabled = true; });
+    showLeaseState(store, notice, setStatus);
+  } else if (initialState === "conflict") {
     setStatus("检测到跨设备保存冲突：当前显示本机恢复内容，尚未覆盖思源");
     if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前脑图覆盖思源中的版本吗？")) {
       void persistMind(true);
@@ -1560,5 +1647,7 @@ try {
   }
 } catch (error) {
   console.error(error);
-  setStatus(error instanceof Error ? error.message : String(error));
+  if (!showStoreOpenError(error, store, notice, setStatus)) {
+    setStatus(error instanceof Error ? error.message : String(error));
+  }
 }

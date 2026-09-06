@@ -10,9 +10,11 @@ import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
 import { Diagnostics } from "./diagnostics";
 import { DragDropController } from "./drag-drop-controller";
+import { DocumentExportMenu } from "./document-export-menu";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
+  isEditableTextFile,
   isFreeMindFile,
   isMarkdownFile,
   isPdfFile,
@@ -24,14 +26,15 @@ import {
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
-const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm47`;
+const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm49`;
+const TEXT_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-text15`;
 
 const EDITOR_SELECTOR = ".protyle-wysiwyg";
 const BLOCK_SELECTOR = "[data-node-id]";
 const TREE_DOCUMENT_SELECTOR = ".b3-list-item[data-node-id]";
 const FILE_TREE_SELECTOR = ".sy__file";
 const CLOUD_DOCUMENT_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/"], [data-src*="/plugins/siyuan-cloud-document-suite/"])';
-const CLOUD_DOCUMENT_EDITOR_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"])';
+const CLOUD_DOCUMENT_EDITOR_IFRAME = 'iframe:is([src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/mm-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/sheet-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/whiteboard-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/text-editor.html"], [data-src*="/plugins/siyuan-cloud-document-suite/text-editor.html"], [src*="/plugins/siyuan-cloud-document-suite/pdf-reader.html"], [data-src*="/plugins/siyuan-cloud-document-suite/pdf-reader.html"])';
 const EMBED_STYLE = "width: 100%; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: transparent; display: block;";
 const EMBED_RESET_CSS = `
 .protyle-wysiwyg [data-node-id].iframe:has(> .iframe-content > ${CLOUD_DOCUMENT_IFRAME}),
@@ -73,7 +76,7 @@ const EMBED_RESET_CSS = `
 class DropImporterPlugin extends Plugin {
   private readonly api = new KernelClient();
   private readonly documents = new DocumentCreator(this.api);
-  private readonly previews = new PreviewBuilders(PLUGIN_VERSION, MM_EDITOR_CACHE_VERSION);
+  private readonly previews = new PreviewBuilders(PLUGIN_VERSION, MM_EDITOR_CACHE_VERSION, TEXT_EDITOR_CACHE_VERSION);
   private dragDepth = 0;
   private overlay: HTMLDivElement | null = null;
   private toastTimer: number | null = null;
@@ -86,12 +89,18 @@ class DropImporterPlugin extends Plugin {
     EDITOR_SELECTOR,
     CLOUD_DOCUMENT_EDITOR_IFRAME,
     PLUGIN_VERSION,
-    MM_EDITOR_CACHE_VERSION
+    MM_EDITOR_CACHE_VERSION,
+    TEXT_EDITOR_CACHE_VERSION
   );
   // Kept only for the legacy wrapper below during the staged refactor.
   private readonly observedEmbedContents = new Set<HTMLElement>();
   private embedResizeObserver: ResizeObserver | null = null;
-  private readonly diagnostics = new Diagnostics((name, data) => this.saveData(name, data));
+  private readonly diagnostics = new Diagnostics();
+  private readonly documentExports = new DocumentExportMenu(
+    this.api,
+    PLUGIN_VERSION,
+    (message, error) => this.showToast(message, error)
+  );
   private readonly dragController = new DragDropController({
     isFileDrag: (event) => this.isFileDrag(event),
     isSupportedPoint: (event) => this.isSupportedPoint(event),
@@ -142,6 +151,7 @@ class DropImporterPlugin extends Plugin {
 
   public onunload(): void {
     this.dragController.stop();
+    this.documentExports.stop();
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
     this.embedResetStyle?.remove();
     this.embedResetStyle = null;
@@ -174,6 +184,13 @@ class DropImporterPlugin extends Plugin {
     const { menu, type, items } = event.detail;
     if (items.length !== 1 || (type !== "doc" && type !== "notebook")) return;
     const target = items[0];
+    if (type === "doc") {
+      void this.documentExports.addForDocument(
+        menu,
+        target.id,
+        this.documentTreeTitle(target.id)
+      );
+    }
     menu.addItem({
       id: "cloud-document-create-menu",
       type: "submenu",
@@ -199,9 +216,25 @@ class DropImporterPlugin extends Plugin {
         {
           id: "cloud-document-create-word",
           icon: "iconFile",
-          label: "新建 Word 文档",
+          label: "新建文档（可导出 Word/PDF）",
           click: async () => {
             await this.createNewWordDocument(type, target.id);
+          }
+        },
+        {
+          id: "cloud-document-create-text",
+          icon: "iconFile",
+          label: "新建文本文件（.txt）",
+          click: async () => {
+            await this.createNewTextFile(type, target.id, "txt");
+          }
+        },
+        {
+          id: "cloud-document-create-html",
+          icon: "iconCode",
+          label: "新建 HTML 文件（.html）",
+          click: async () => {
+            await this.createNewTextFile(type, target.id, "html");
           }
         },
         {
@@ -249,6 +282,7 @@ class DropImporterPlugin extends Plugin {
         )
       );
       asset.originalName = "新建白板";
+      asset.documentKind = "whiteboard";
       asset.documentMarkdown = this.previews.buildWhiteboard(asset);
       const notebook = await this.documents.resolveNotebookId(type, targetId);
       await this.documents.createRootDocuments(notebook, [asset]);
@@ -266,16 +300,19 @@ class DropImporterPlugin extends Plugin {
   }
 
   private scheduleCreateFileMenuPromotion(): void {
-    for (const delay of [0, 16, 50]) {
+    for (const delay of [0, 16, 50, 120]) {
       const timer = window.setTimeout(() => {
         this.menuPromotionTimers.delete(timer);
-        this.promoteCreateFileMenu();
+        const promoted = this.promoteCreateFileMenu();
+        if (delay === 120 && !promoted) {
+          console.info("[Cloud Document Suite] Native menu layout changed; creation remains in the standard plugin submenu");
+        }
       }, delay);
       this.menuPromotionTimers.add(timer);
     }
   }
 
-  private promoteCreateFileMenu(): void {
+  private promoteCreateFileMenu(): boolean {
     const createItem = document.querySelector<HTMLElement>(
       '.b3-menu [data-id="cloud-document-create-menu"]'
     );
@@ -283,7 +320,8 @@ class DropImporterPlugin extends Plugin {
     const rootItems = rootMenu?.querySelector<HTMLElement>(
       ":scope > .b3-menu__items"
     );
-    if (!createItem || !rootItems || createItem.parentElement === rootItems) return;
+    if (!createItem || !rootItems) return false;
+    if (createItem.parentElement === rootItems) return true;
 
     const replaceItem = rootItems.querySelector<HTMLElement>(
       ':scope > [data-id="replace"]'
@@ -299,6 +337,7 @@ class DropImporterPlugin extends Plugin {
     if (replaceItem) rootItems.insertBefore(createItem, replaceItem.nextElementSibling);
     else if (separatorBeforeClose) rootItems.insertBefore(createItem, separatorBeforeClose);
     else rootItems.prepend(createItem);
+    return createItem.parentElement === rootItems;
   }
 
   private async createNewMindMap(
@@ -316,6 +355,7 @@ class DropImporterPlugin extends Plugin {
       // The kernel keeps assets after their document is deleted. Always upload
       // a fresh backing file, but keep the user-facing document title stable.
       asset.originalName = "新建脑图.mm";
+      asset.documentKind = "mindmap";
       asset.documentMarkdown = this.previews.buildFreeMind(asset, xml);
       const notebook = await this.documents.resolveNotebookId(type, targetId);
       await this.documents.createRootDocuments(notebook, [asset]);
@@ -342,14 +382,15 @@ class DropImporterPlugin extends Plugin {
       const path = await this.documents.findAvailableChildPath(
         notebook,
         "/",
-        "新建 Word 文档"
+        "新建文档"
       );
-      await this.postJson<string>("/api/filetree/createDocWithMd", {
+      const documentId = await this.postJson<string>("/api/filetree/createDocWithMd", {
         notebook,
         path,
         markdown: ""
       });
-      this.showToast("Word 文档已创建，可编辑后通过“导出 → Word .docx”导出");
+      await this.documents.tagDocument(documentId, "document");
+      this.showToast("文档已创建，可通过思源“导出”菜单导出 Word/PDF");
       await this.recordDebug("word-document-created", { type, targetId, path });
     } catch (error) {
       console.error("[Drop Importer] Cannot create Word document", error);
@@ -384,6 +425,7 @@ class DropImporterPlugin extends Plugin {
         })
       );
       asset.originalName = "新建 Excel 工作簿.xlsx";
+      asset.documentKind = "spreadsheet";
       asset.documentMarkdown = this.previews.buildSpreadsheet(asset);
       const notebook = await this.documents.resolveNotebookId(type, targetId);
       await this.documents.createRootDocuments(notebook, [asset]);
@@ -395,6 +437,42 @@ class DropImporterPlugin extends Plugin {
       await this.recordDebug("spreadsheet-create-failed", {
         type,
         targetId,
+        reason: String(error)
+      });
+    }
+  }
+
+  private async createNewTextFile(
+    type: "doc" | "notebook",
+    targetId: string,
+    format: "txt" | "html"
+  ): Promise<void> {
+    const isHtml = format === "html";
+    const fileName = isHtml ? "新建页面.html" : "新建文本.txt";
+    const initialContent = isHtml
+      ? "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>新建页面</title>\n</head>\n<body>\n  \n</body>\n</html>\n"
+      : "";
+    this.showToast(`正在创建${isHtml ? " HTML" : "文本"}文件…`);
+    try {
+      const asset = await this.api.uploadAsset(
+        new File([initialContent], buildUniqueUploadName(fileName), {
+          type: isHtml ? "text/html;charset=utf-8" : "text/plain;charset=utf-8"
+        })
+      );
+      asset.originalName = fileName;
+      asset.documentKind = "text";
+      asset.documentMarkdown = this.previews.buildText(asset);
+      const notebook = await this.documents.resolveNotebookId(type, targetId);
+      await this.documents.createRootDocuments(notebook, [asset]);
+      this.showToast(`${isHtml ? "HTML" : "文本"}文件已创建`);
+      await this.recordDebug("text-file-created", { type, targetId, format, asset });
+    } catch (error) {
+      console.error("[Cloud Document Suite] Cannot create text file", error);
+      this.showToast(`${isHtml ? "HTML" : "文本"}文件创建失败，请查看诊断信息`, true);
+      await this.recordDebug("text-file-create-failed", {
+        type,
+        targetId,
+        format,
         reason: String(error)
       });
     }
@@ -518,24 +596,32 @@ class DropImporterPlugin extends Plugin {
               ? await this.previews.buildXMind(asset, content)
               : new TextDecoder().decode(content);
           } else if (isPdfFile(file.name)) {
+            asset.documentKind = "pdf";
             asset.documentMarkdown = this.previews.buildPdf(asset);
           } else if (isSpreadsheetFile(file.name)) {
+            asset.documentKind = "spreadsheet";
             asset.documentMarkdown = this.previews.buildSpreadsheet(asset);
           } else if (isWordFile(file.name)) {
+            asset.documentKind = "document";
             asset.documentMarkdown = await this.previews.buildWord(
               asset,
               await file.arrayBuffer()
             );
           } else if (isXMindFile(file.name)) {
+            asset.documentKind = "xmind";
             asset.documentMarkdown = await this.previews.buildXMind(
               asset,
               await file.arrayBuffer()
             );
           } else if (isFreeMindFile(file.name)) {
+            asset.documentKind = "mindmap";
             asset.documentMarkdown = this.previews.buildFreeMind(
               asset,
               await file.text()
             );
+          } else if (isEditableTextFile(file.name)) {
+            asset.documentKind = "text";
+            asset.documentMarkdown = this.previews.buildText(asset);
           }
         } catch (previewError) {
           console.error("[Drop Importer] Preview generation failed", previewError);
@@ -600,10 +686,12 @@ class DropImporterPlugin extends Plugin {
       } catch {
         continue;
       }
-      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm|sheet|whiteboard)-editor\.html$/i.test(url.pathname)) continue;
+      if (!/\/plugins\/siyuan-cloud-document-suite\/(?:mm-editor|sheet-editor|whiteboard-editor|text-editor|pdf-reader)\.html$/i.test(url.pathname)) continue;
       const editorVersion = /\/mm-editor\.html$/i.test(url.pathname)
         ? MM_EDITOR_CACHE_VERSION
-        : PLUGIN_VERSION;
+        : /\/text-editor\.html$/i.test(url.pathname)
+          ? TEXT_EDITOR_CACHE_VERSION
+          : PLUGIN_VERSION;
       if (url.searchParams.get("v") === editorVersion) continue;
 
       url.searchParams.set("v", editorVersion);
@@ -674,7 +762,7 @@ class DropImporterPlugin extends Plugin {
       (child) => child.localName.toLowerCase() === "node"
     );
     if (!root) throw new Error("FreeMind root node not found");
-    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(MM_EDITOR_CACHE_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(MM_EDITOR_CACHE_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
     return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
@@ -862,7 +950,7 @@ class DropImporterPlugin extends Plugin {
   private buildSpreadsheetPreviewMarkdown(
     asset: UploadedAsset
   ): string {
-    const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(PLUGIN_VERSION)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
+    const editorUrl = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(`${PLUGIN_VERSION}-sheet10`)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
     return `<iframe src="${this.escapeHtmlAttribute(editorUrl)}" data-src="${this.escapeHtmlAttribute(editorUrl)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
   }
 
@@ -951,6 +1039,16 @@ class DropImporterPlugin extends Plugin {
       }
     }
     return null;
+  }
+
+  private documentTreeTitle(documentId: string): string | undefined {
+    for (const row of document.querySelectorAll<HTMLElement>(
+      ".b3-list-item[data-node-id]"
+    )) {
+      if (row.dataset.nodeId !== documentId) continue;
+      return row.querySelector<HTMLElement>(".b3-list-item__text")?.textContent?.trim() || undefined;
+    }
+    return undefined;
   }
 
   private describeDrop(event: DragEvent, target: DropTarget | null, files: File[] = []): Record<string, unknown> {

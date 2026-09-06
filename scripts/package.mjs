@@ -26,6 +26,7 @@ await Promise.all([
   ,copyVersionedHtml("static/sheet-editor.js", "dist/sheet-editor.js")
   ,copyFile("static/sheet-workbook.js", "dist/sheet-workbook.js")
   ,copyFile("static/siyuan-file-store.js", "dist/siyuan-file-store.js")
+  ,copyFile("static/editor-session.js", "dist/editor-session.js")
   ,copyVersionedHtml("static/whiteboard-editor.html", "dist/whiteboard-editor.html")
   ,copyVersionedHtml("static/whiteboard-editor.js", "dist/whiteboard-editor.js")
   ,copyVersionedHtml("static/whiteboard-model.js", "dist/whiteboard-model.js")
@@ -33,6 +34,14 @@ await Promise.all([
   ,copyVersionedHtml("static/whiteboard-layout.js", "dist/whiteboard-layout.js")
   ,copyVersionedHtml("static/whiteboard-interactions.js", "dist/whiteboard-interactions.js")
   ,copyVersionedHtml("static/whiteboard-templates.js", "dist/whiteboard-templates.js")
+  ,copyVersionedHtml("static/document-print.html", "dist/document-print.html")
+  ,copyFile("static/document-print.js", "dist/document-print.js")
+  ,copyVersionedHtml("static/text-editor.html", "dist/text-editor.html")
+  ,copyVersionedHtml("static/text-editor.js", "dist/text-editor.js")
+  ,copyFile("static/text-editor-core.js", "dist/text-editor-core.js")
+  ,copyVersionedHtml("static/pdf-reader.html", "dist/pdf-reader.html")
+  ,copyVersionedHtml("static/pdf-reader.js", "dist/pdf-reader.js")
+  ,copyFile("static/pdf-reader-core.js", "dist/pdf-reader-core.js")
   ,copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
 ]);
 

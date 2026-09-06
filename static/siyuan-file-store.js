@@ -6,7 +6,110 @@ export class SaveConflictError extends Error {
   }
 }
 
+export class MissingAssetError extends Error {
+  constructor(message = "思源附件不存在或已被同步移入冲突目录", recoverable = false) {
+    super(message);
+    this.name = "MissingAssetError";
+    this.code = "ASSET_MISSING";
+    this.recoverable = Boolean(recoverable);
+  }
+}
+
+export class EditLeaseError extends Error {
+  constructor(message = "该附件正在另一个页面中编辑") {
+    super(message);
+    this.name = "EditLeaseError";
+    this.code = "EDIT_LEASE_DENIED";
+  }
+}
+
 const RECOVERY_SCHEMA = "siyuan-cloud-document-recovery-v1";
+const BACKUP_DB = "siyuan-cloud-document-suite-recovery-v1";
+const BACKUP_STORE = "asset-backups";
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
+const LEASE_DIRECTORY = "/temp/siyuan-cloud-document-suite/edit-locks";
+const LEASE_TTL_MS = 45_000;
+const LEASE_RENEW_MS = 15_000;
+const utf8Encoder = new TextEncoder();
+
+function randomId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function openBackupDatabase() {
+  if (typeof globalThis.indexedDB?.open !== "function") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const request = globalThis.indexedDB.open(BACKUP_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(BACKUP_STORE)) {
+        request.result.createObjectStore(BACKUP_STORE, { keyPath: "asset" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+}
+
+const defaultBackupStore = {
+  async read(asset) {
+    const database = await openBackupDatabase();
+    if (!database) return null;
+    return new Promise((resolve) => {
+      const transaction = database.transaction(BACKUP_STORE, "readonly");
+      const request = transaction.objectStore(BACKUP_STORE).get(asset);
+      request.onsuccess = () => {
+        const bytes = request.result?.bytes;
+        resolve(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : null);
+      };
+      request.onerror = () => resolve(null);
+      transaction.oncomplete = () => database.close();
+      transaction.onabort = () => database.close();
+    });
+  },
+  async write(asset, bytes) {
+    const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (source.byteLength > MAX_BACKUP_BYTES) return false;
+    const database = await openBackupDatabase();
+    if (!database) return false;
+    return new Promise((resolve) => {
+      const transaction = database.transaction(BACKUP_STORE, "readwrite");
+      transaction.objectStore(BACKUP_STORE).put({
+        asset,
+        bytes: source.slice().buffer,
+        updatedAt: Date.now()
+      });
+      transaction.oncomplete = () => { database.close(); resolve(true); };
+      transaction.onerror = () => { database.close(); resolve(false); };
+      transaction.onabort = () => { database.close(); resolve(false); };
+    });
+  }
+};
+
+export function stripKnownTextResponseInjection(bytes) {
+  const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const hasBom = source.length >= 3 && source[0] === 0xef && source[1] === 0xbb && source[2] === 0xbf;
+  const payload = hasBom ? source.subarray(3) : source;
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+  } catch {
+    return source;
+  }
+  if (!text.includes("local.adguard.org")) return source;
+  const cleaned = text.replace(
+    /<script\b(?=[^>]*\bsrc=["']\/\/local\.adguard\.org\?[^"']*(?:type=(?:content-script|user-script)|name=AdGuard))[^>]*><\/script>/gi,
+    ""
+  );
+  if (cleaned === text) return source;
+  const encoded = utf8Encoder.encode(cleaned);
+  if (!hasBom) return encoded;
+  const result = new Uint8Array(encoded.length + 3);
+  result.set([0xef, 0xbb, 0xbf]);
+  result.set(encoded, 3);
+  return result;
+}
 
 const SHA256_CONSTANTS = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -102,7 +205,7 @@ function cacheBusted(url) {
 }
 
 export class SiyuanFileStore {
-  constructor(asset, recoveryKey) {
+  constructor(asset, recoveryKey, { rawApi = false, backupStore = defaultBackupStore } = {}) {
     if (!asset) throw new Error("缺少附件路径");
     const url = new URL(asset, location.origin);
     let pathname;
@@ -123,8 +226,27 @@ export class SiyuanFileStore {
     this.workspacePath = `/data${pathname}`;
     this.filename = pathname.split("/").pop() || "attachment";
     this.recoveryKey = recoveryKey;
+    this.rawApi = Boolean(rawApi);
+    this.backupStore = backupStore;
     this.baseHash = null;
     this.conflicted = false;
+    this.leaseOwner = randomId();
+    this.leasePath = null;
+    this.leaseState = "idle";
+    this.leaseHolder = null;
+    this.leaseTimer = null;
+    this.releaseBound = false;
+  }
+
+  canEdit() {
+    return this.leaseState !== "denied" && this.leaseState !== "lost";
+  }
+
+  leaseDescription() {
+    if (this.canEdit()) return "";
+    const expiresAt = Number(this.leaseHolder?.expiresAt) || 0;
+    const until = expiresAt > Date.now() ? `，锁将在 ${new Date(expiresAt).toLocaleTimeString()} 后自动释放` : "";
+    return `该附件正在另一个页面中编辑${until}`;
   }
 
   findHostBlockId() {
@@ -172,18 +294,196 @@ export class SiyuanFileStore {
   }
 
   async fetchRemote() {
+    if (this.rawApi) {
+      const response = await fetch("/api/file/getFile", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/octet-stream",
+          "Range": "bytes=0-",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        body: JSON.stringify({ path: this.workspacePath })
+      });
+      if (!response.ok) {
+        let missing = response.status === 404;
+        if (response.status === 202) {
+          try { missing = Number((await response.clone().json())?.code) === 404; } catch { /* Non-JSON error. */ }
+        }
+        if (missing) throw new MissingAssetError(undefined, Boolean(await this.backupStore.read(this.asset)));
+        throw new Error(`读取原始附件失败：HTTP ${response.status}`);
+      }
+      return stripKnownTextResponseInjection(new Uint8Array(await response.arrayBuffer()));
+    }
     const response = await fetch(cacheBusted(this.asset), {
       cache: "no-store",
       credentials: "include"
     });
-    if (!response.ok) throw new Error(`读取附件失败：HTTP ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new MissingAssetError(undefined, Boolean(await this.backupStore.read(this.asset)));
+      }
+      throw new Error(`读取附件失败：HTTP ${response.status}`);
+    }
     return new Uint8Array(await response.arrayBuffer());
   }
 
   async loadRemote() {
     const bytes = await this.fetchRemote();
     this.baseHash = await contentHash(bytes);
+    void this.backupStore.write(this.asset, bytes);
     return bytes;
+  }
+
+  async openRemote() {
+    await this.acquireEditLease();
+    return this.loadRemote();
+  }
+
+  async postFile(path, bytes, isDir = false) {
+    const form = new FormData();
+    form.append("path", path);
+    form.append("isDir", isDir ? "true" : "false");
+    if (!isDir) {
+      const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || 0);
+      form.append("file", new Blob([source]), path.split("/").pop() || "file");
+    }
+    const response = await fetch("/api/file/putFile", {
+      method: "POST",
+      credentials: "include",
+      body: form
+    });
+    if (!response.ok) throw new Error(`写入思源失败：HTTP ${response.status}`);
+    const result = await response.json();
+    if (result.code !== 0) throw new Error(result.msg || `写入思源失败：${result.code}`);
+  }
+
+  async readWorkspaceJson(path) {
+    const response = await fetch("/api/file/getFile", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path })
+    });
+    if (response.status === 202 || response.status === 404) return null;
+    if (!response.ok) throw new Error(`读取编辑锁失败：HTTP ${response.status}`);
+    try { return await response.json(); } catch { return null; }
+  }
+
+  async writeLease(lease) {
+    await this.postFile(this.leasePath, utf8Encoder.encode(`${JSON.stringify(lease)}\n`));
+  }
+
+  async acquireEditLease({ ttl = LEASE_TTL_MS } = {}) {
+    if (this.leaseState === "acquired") return { acquired: true, holder: null };
+    if (!this.leasePath) {
+      const key = await contentHash(utf8Encoder.encode(this.asset));
+      this.leasePath = `${LEASE_DIRECTORY}/${key}.json`;
+    }
+    try {
+      await this.postFile(LEASE_DIRECTORY, null, true);
+      const existing = await this.readWorkspaceJson(this.leasePath);
+      if (existing?.owner && existing.owner !== this.leaseOwner && Number(existing.expiresAt) > Date.now()) {
+        this.leaseState = "denied";
+        this.leaseHolder = existing;
+        return { acquired: false, holder: existing };
+      }
+      const proposed = {
+        schema: "siyuan-cloud-document-edit-lease-v1",
+        owner: this.leaseOwner,
+        asset: this.asset,
+        expiresAt: Date.now() + ttl
+      };
+      await this.writeLease(proposed);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const confirmed = await this.readWorkspaceJson(this.leasePath);
+      if (confirmed?.owner !== this.leaseOwner) {
+        this.leaseState = "denied";
+        this.leaseHolder = confirmed;
+        return { acquired: false, holder: confirmed };
+      }
+      this.leaseState = "acquired";
+      this.leaseHolder = null;
+      clearInterval(this.leaseTimer);
+      this.leaseTimer = setInterval(() => void this.renewEditLease(), LEASE_RENEW_MS);
+      if (!this.releaseBound && typeof globalThis.addEventListener === "function") {
+        this.releaseBound = true;
+        globalThis.addEventListener("pagehide", () => void this.releaseEditLease(), { once: true });
+      }
+      return { acquired: true, holder: null };
+    } catch (error) {
+      // A missing temp-file API must not make the editor unusable. Hash based
+      // optimistic concurrency remains active as the cross-kernel fallback.
+      console.warn("[Cloud Document Suite] Edit lease unavailable", error);
+      this.leaseState = "unavailable";
+      return { acquired: true, holder: null, unavailable: true };
+    }
+  }
+
+  async renewEditLease() {
+    if (this.leaseState !== "acquired") return false;
+    try {
+      const current = await this.readWorkspaceJson(this.leasePath);
+      if (current?.owner !== this.leaseOwner) {
+        this.leaseState = "lost";
+        this.leaseHolder = current;
+        clearInterval(this.leaseTimer);
+        return false;
+      }
+      await this.writeLease({ ...current, expiresAt: Date.now() + LEASE_TTL_MS });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async assertEditLease() {
+    if (this.leaseState === "denied" || this.leaseState === "lost") {
+      throw new EditLeaseError(this.leaseDescription());
+    }
+    if (this.leaseState !== "acquired") return true;
+    const current = await this.readWorkspaceJson(this.leasePath);
+    if (current?.owner !== this.leaseOwner || Number(current.expiresAt) <= Date.now()) {
+      this.leaseState = "lost";
+      this.leaseHolder = current;
+      throw new EditLeaseError("编辑锁已失效，为防止覆盖其他页面，当前修改没有写入思源");
+    }
+    return true;
+  }
+
+  async releaseEditLease() {
+    clearInterval(this.leaseTimer);
+    if (this.leaseState !== "acquired" || !this.leasePath) return false;
+    try {
+      const current = await this.readWorkspaceJson(this.leasePath);
+      if (current?.owner !== this.leaseOwner) return false;
+      const response = await fetch("/api/file/removeFile", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: this.leasePath })
+      });
+      this.leaseState = "released";
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async restoreBackup() {
+    const bytes = await this.backupStore.read(this.asset);
+    if (!bytes) throw new Error("当前浏览器没有可用的附件恢复副本");
+    await this.assertEditLease();
+    await this.postFile(this.workspacePath, bytes);
+    const verified = await this.fetchRemote();
+    if (await contentHash(verified) !== await contentHash(bytes)) {
+      throw new Error("恢复附件后的内容校验失败");
+    }
+    this.baseHash = await contentHash(verified);
+    return verified;
   }
 
   readRecovery() {
@@ -217,6 +517,7 @@ export class SiyuanFileStore {
   }
 
   async save(bytes, { force = false } = {}) {
+    await this.assertEditLease();
     const desired = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     // Capture before the first await. A newer edit may replace this recovery
     // entry while the network write is in flight and must not be cleared by it.
@@ -257,6 +558,8 @@ export class SiyuanFileStore {
     }
 
     const syncMarked = await this.tryMarkForSync(desiredHash);
+
+    void this.backupStore.write(this.asset, verified);
 
     this.baseHash = desiredHash;
     this.conflicted = false;

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PDF 阅读器</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f4f5f7;--panel:#fff;--border:#e3e5e8;--text:#202124;--muted:#7a8089;--accent:#4285f4;--accent-soft:#e8f1ff;--danger:#d93025;--success:#188038}
+    @media(prefers-color-scheme:dark){:root{--bg:#1d1e20;--panel:#292a2d;--border:#3c4043;--text:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8;--accent-soft:#263b5c;--danger:#f28b82;--success:#81c995}}
+    *{box-sizing:border-box}html,body,#app{height:100%;margin:0}body{overflow:hidden;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+    #app{display:flex;min-width:0;flex-direction:column}.toolbar{min-height:43px;display:flex;align-items:center;gap:7px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--panel)}.identity{display:flex;min-width:0;align-items:center;gap:7px;margin-right:auto}.file-name{max-width:min(360px,34vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kind{padding:2px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-size:11px}.status{max-width:280px;overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}.status[data-state="working"]{color:var(--accent)}.status[data-state="ready"]{color:var(--success)}.status[data-state="error"]{color:var(--danger)}
+    .actions{display:flex;min-width:0;align-items:center;gap:7px;overflow-x:auto;scrollbar-width:thin}.page-control{display:flex;flex:0 0 auto;align-items:center;gap:5px;color:var(--muted);white-space:nowrap}.page-control input{width:58px;height:29px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}button{height:29px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);cursor:pointer;white-space:nowrap}button:hover,button:focus-visible{border-color:var(--accent);color:var(--accent);outline:0}button:disabled{cursor:default;opacity:.45}.viewer-shell{position:relative;min-height:0;flex:1}.viewer{display:block;width:100%;height:100%;border:0;background:var(--bg)}.loading,.error-panel{position:absolute;z-index:2;inset:0;display:grid;place-content:center;justify-items:center;gap:10px;padding:24px;background:var(--bg);text-align:center}.loading[hidden],.error-panel[hidden]{display:none}.error-panel strong{color:var(--danger);font-size:16px}.error-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}.footer{min-height:29px;display:flex;align-items:center;gap:14px;padding:5px 10px;border-top:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12px}.footer .hint{margin-left:auto;text-align:right}
+    @media(max-width:760px){.toolbar{align-items:flex-start;flex-wrap:wrap}.identity{width:100%}.status{margin-left:auto;max-width:42vw}.actions{width:100%}.file-name{max-width:48vw}.footer .hint{display:none}}
+  </style>
+</head>
+<body>
+  <main id="app">
+    <header class="toolbar">
+      <div class="identity"><strong id="file-name" class="file-name">PDF 文档</strong><span class="kind">PDF</span><span id="status" class="status" data-state="working">正在检查原文件…</span></div>
+      <nav class="actions" aria-label="PDF 文件操作">
+        <label class="page-control">页码 <input id="page-number" type="number" min="1" step="1" value="1" inputmode="numeric"><button id="page-go" type="button">跳转</button></label>
+        <button id="reload" type="button">重新加载</button>
+        <button id="open" type="button">打开原文件</button>
+        <button id="download" type="button">下载</button>
+        <button id="print" type="button">打印</button>
+        <button id="fullscreen" type="button" aria-pressed="false">全屏</button>
+      </nav>
+    </header>
+    <section class="viewer-shell">
+      <iframe id="viewer" class="viewer" title="PDF 原生阅读器"></iframe>
+      <div id="loading" class="loading"><strong>正在打开 PDF…</strong><span>将使用 Chromium 原生 PDF 阅读能力</span></div>
+      <div id="error-panel" class="error-panel" role="alert" hidden><strong>PDF 无法打开</strong><span id="error-message">请检查原文件是否存在或损坏。</span><div class="error-actions"><button id="retry" type="button">重新尝试</button><button id="error-open" type="button">打开原文件</button><button id="error-download" type="button">下载原文件</button></div></div>
+    </section>
+    <footer class="footer"><span id="file-info">原始附件</span><span id="page-state">请求页码 1</span><span class="hint">精确页码、搜索和缩放仍可使用 PDF 内置工具栏</span></footer>
+  </main>
+  <script type="module" src="./pdf-reader.js?v=__PLUGIN_VERSION__-pdf2"></script>
+</body>
+</html>

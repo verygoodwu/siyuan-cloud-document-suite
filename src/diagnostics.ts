@@ -1,16 +1,19 @@
-export type DebugSave = (name: string, data: Record<string, unknown>) => Promise<void>;
-
 export class Diagnostics {
   private last: Record<string, unknown> = {};
-
-  constructor(private readonly save: DebugSave) {}
 
   async record(stage: string, details: Record<string, unknown> = {}): Promise<void> {
     this.last = { stage, time: new Date().toISOString(), ...details };
     try {
-      await this.save("drop-debug.json", this.last);
+      // Diagnostics are deliberately browser-local. Writing a single mutable
+      // file under data/storage makes every device update the same sync path
+      // and can turn ordinary plugin activity into a data-sync conflict.
+      globalThis.localStorage?.setItem(
+        "siyuan-cloud-document-suite:diagnostics-v1",
+        JSON.stringify(this.last)
+      );
+      console.debug("[Cloud Document Suite]", this.last);
     } catch (error) {
-      console.error("[Drop Importer] Cannot save diagnostics", error);
+      console.debug("[Cloud Document Suite] Cannot cache diagnostics", error);
     }
   }
 

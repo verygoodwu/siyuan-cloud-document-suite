@@ -9,10 +9,20 @@ export interface AssetUploadData {
   succMap: Record<string, string>;
 }
 
+export type CloudDocumentKind =
+  | "document"
+  | "mindmap"
+  | "spreadsheet"
+  | "whiteboard"
+  | "text"
+  | "pdf"
+  | "xmind";
+
 export interface UploadedAsset {
   originalName: string;
   assetPath: string;
   documentMarkdown?: string;
+  documentKind?: CloudDocumentKind;
 }
 
 export interface DropTarget {

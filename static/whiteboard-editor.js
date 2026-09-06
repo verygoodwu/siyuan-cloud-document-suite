@@ -1,4 +1,5 @@
-import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__";
+import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   anchorForDirection,
   cloneWhiteboardDocument,
@@ -42,12 +43,16 @@ import {
 
 const params = new URLSearchParams(location.search);
 const asset = params.get("asset");
+const requestedName = params.get("name")?.split(/[\\/]/).pop()?.trim() || "";
 const assetFileName = (() => {
+  if (requestedName) return requestedName;
   try { return decodeURIComponent(asset?.split("/").pop() || "新建白板.board.json"); }
   catch { return "新建白板.board.json"; }
 })();
 const storageKey = `siyuan-whiteboard-editor:${asset}`;
 const store = new SiyuanFileStore(asset, storageKey);
+const viewSession = createEditorSession("whiteboard", asset);
+const notice = createOperationNotice();
 const encoder = new TextEncoder();
 
 const shell = document.querySelector("#canvas-shell");
@@ -79,6 +84,10 @@ const shapeMenu = document.querySelector("#shape-menu");
 const arrangeAction = document.querySelector("#arrange-action");
 const layerAction = document.querySelector("#layer-action");
 const templateDialog = document.querySelector("#template-dialog");
+const fullscreenButton = document.querySelector("#fullscreen");
+const searchPanel = document.querySelector("#board-search");
+const searchInput = document.querySelector("#board-search-input");
+const searchCount = document.querySelector("#board-search-count");
 
 let whiteboard;
 let selectedIds = new Set();
@@ -95,12 +104,57 @@ let history = [];
 let historyIndex = -1;
 let clipboardNodes = [];
 let editingNodeId = null;
+let searchMatches = [];
+let searchIndex = -1;
 const DRAG_THRESHOLD_PX = 5;
 
 function setStatus(message, state = "idle") {
   status.textContent = message;
   status.dataset.state = state;
   status.title = message;
+}
+
+function recoveryBytes() {
+  return encoder.encode(serializeWhiteboardDocument(whiteboard));
+}
+
+function downloadRecoveryBoard() {
+  const recoveryName = assetFileName.replace(/(?:\.board)?\.json$/i, "") + ".recovery.board.json";
+  downloadBytes(recoveryBytes(), recoveryName, "application/json;charset=utf-8");
+  notice.show(`已下载恢复副本 ${recoveryName}`);
+}
+
+function collectBoardSearchMatches() {
+  if (!whiteboard) return;
+  const query = searchInput.value.trim().toLocaleLowerCase();
+  searchMatches = query
+    ? whiteboard.nodes.filter((node) => !["connector", "freehand", "image"].includes(node.type) && String(node.text || "").toLocaleLowerCase().includes(query))
+    : [];
+  if (searchIndex >= searchMatches.length) searchIndex = -1;
+  searchCount.textContent = query ? `${searchMatches.length} 项` : "输入关键词";
+}
+
+function findNextBoardNode(direction = 1) {
+  collectBoardSearchMatches();
+  if (!searchMatches.length) return;
+  searchIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length;
+  const node = searchMatches[searchIndex];
+  selectedIds = new Set([node.id]);
+  searchCount.textContent = `${searchIndex + 1}/${searchMatches.length}`;
+  fitSelection();
+  render();
+}
+
+function openBoardSearch() {
+  if (!whiteboard) return;
+  searchPanel.hidden = false;
+  requestAnimationFrame(() => { searchInput.focus(); searchInput.select(); });
+  collectBoardSearchMatches();
+}
+
+function closeBoardSearch() {
+  searchPanel.hidden = true;
+  shell.focus?.();
 }
 
 function currentViewport() {
@@ -142,6 +196,7 @@ function nodeAnchorFromPoint(node, point) {
 
 function setTool(next) {
   tool = next;
+  viewSession.write({ tool });
   shell.className = `canvas-shell tool-${next}`;
   document.querySelectorAll("[data-tool]").forEach((button) => button.classList.toggle("active", button.dataset.tool === next));
   shapeMenu.hidden = true;
@@ -280,7 +335,7 @@ function commitChange({ history: withHistory = true } = {}) {
   render();
 }
 
-async function persist(force) {
+async function persist(force, notify = false) {
   window.clearTimeout(saveTimer);
   if (saving) {
     saveAgain = true;
@@ -294,6 +349,7 @@ async function persist(force) {
     savedRevision = targetRevision;
     conflictNotice.hidden = true;
     if (revision === savedRevision) setStatus("已保存到思源", "saved");
+    if (notify) notice.show("已保存到思源附件");
   } catch (error) {
     if (error instanceof SaveConflictError) {
       conflictNotice.hidden = false;
@@ -301,6 +357,14 @@ async function persist(force) {
     } else {
       console.error("[Cloud Document Suite] Cannot save whiteboard", error);
       setStatus(`保存失败：${error.message || error}`, "error");
+      notice.show(`保存失败：${error.message || error}`, {
+        tone: "error",
+        duration: 0,
+        actions: [
+          { label: "重试", run: () => void persist(false, true) },
+          { label: "下载恢复副本", run: downloadRecoveryBoard }
+        ]
+      });
     }
   } finally {
     saving = false;
@@ -418,6 +482,7 @@ function createConnectedNode(source, direction = "right", edit = true) {
 
 function deleteSelection() {
   if (!selectedIds.size) return;
+  const count = selectedIds.size;
   const deleting = new Set(selectedIds);
   detachWhiteboardReferences(whiteboard, deleting);
   whiteboard.nodes = whiteboard.nodes.filter((node) => {
@@ -427,12 +492,14 @@ function deleteSelection() {
   });
   selectedIds.clear();
   commitChange();
+  notice.show(`已删除 ${count} 个对象`, { duration: 3200, actions: [{ label: "撤销", run: () => restoreHistory(historyIndex - 1) }] });
 }
 
 function duplicateSelection() {
   if (!selectedIds.size) return;
   selectedIds = new Set(duplicateWhiteboardNodes(whiteboard, selectedIds));
   commitChange();
+  notice.show("已复制所选对象", { duration: 3200, actions: [{ label: "撤销", run: () => restoreHistory(historyIndex - 1) }] });
 }
 
 function copySelection() {
@@ -448,6 +515,7 @@ function pasteSelection() {
   selectedIds = new Set(copied.map((node) => node.id));
   clipboardNodes = copied.map((node) => JSON.parse(JSON.stringify(node)));
   commitChange();
+  notice.show("已粘贴所选对象", { duration: 3200, actions: [{ label: "撤销", run: () => restoreHistory(historyIndex - 1) }] });
 }
 
 function textEditingBounds(node) {
@@ -1009,6 +1077,7 @@ function exportSvg() {
   const svg = buildWhiteboardSvg(whiteboard);
   downloadBlob(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }), `${whiteboard.title || "白板"}.svg`);
   setStatus("已导出 SVG", "saved");
+  notice.show("已导出 SVG");
 }
 
 function exportPng() {
@@ -1029,6 +1098,7 @@ function exportPng() {
       canvas.toBlob((blob) => {
         if (blob) downloadBlob(blob, `${whiteboard.title || "白板"}.png`);
         setStatus(blob ? "已导出 PNG" : "PNG 导出失败", blob ? "saved" : "error");
+        notice.show(blob ? "已导出 PNG" : "PNG 导出失败", { tone: blob ? "default" : "error" });
       }, "image/png");
     } catch (error) {
       console.error("[Cloud Document Suite] Cannot export whiteboard PNG", error);
@@ -1103,9 +1173,22 @@ function insertTemplate(id) {
   selectedIds = new Set(nodes.filter((node) => node.type !== "connector").map((node) => node.id));
   templateDialog.close();
   commitChange();
+  notice.show("已插入白板模板", { duration: 3200, actions: [{ label: "撤销", run: () => restoreHistory(historyIndex - 1) }] });
 }
 
 function onKeyDown(event) {
+  const modifier = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+  if (modifier && key === "f") {
+    event.preventDefault();
+    openBoardSearch();
+    return;
+  }
+  if (event.key === "Escape" && !searchPanel.hidden) {
+    event.preventDefault();
+    closeBoardSearch();
+    return;
+  }
   const editingText = event.target === textEditorInput
     || (event.target instanceof Node && textEditor.contains(event.target));
   if (editingText || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
@@ -1118,8 +1201,6 @@ function onKeyDown(event) {
     }
     return;
   }
-  const modifier = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
   if (event.code === "Space" && !temporaryHand) {
     temporaryHand = true;
     shell.classList.add("tool-hand");
@@ -1145,7 +1226,7 @@ function onKeyDown(event) {
     pasteSelection();
   } else if (modifier && key === "s") {
     event.preventDefault();
-    void persist(false);
+    void persist(false, true);
   } else if (modifier && key === "0") {
     event.preventDefault();
     fitContent();
@@ -1233,6 +1314,14 @@ function bindControls() {
   layerAction.addEventListener("change", () => applyLayer(layerAction.value));
   document.querySelector("#template-button").addEventListener("click", () => templateDialog.showModal());
   document.querySelector("#close-templates").addEventListener("click", () => templateDialog.close());
+  document.querySelector("#board-search-toggle").addEventListener("click", openBoardSearch);
+  document.querySelector("#board-search-close").addEventListener("click", closeBoardSearch);
+  document.querySelector("#board-search-next").addEventListener("click", () => findNextBoardNode(1));
+  searchInput.addEventListener("input", () => { searchIndex = -1; collectBoardSearchMatches(); });
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); findNextBoardNode(event.shiftKey ? -1 : 1); }
+    else if (event.key === "Escape") { event.preventDefault(); closeBoardSearch(); }
+  });
   document.querySelectorAll("[data-template]").forEach((button) => button.addEventListener("click", () => insertTemplate(button.dataset.template)));
   fillColor.addEventListener("input", () => applyStyle("fill", fillColor.value));
   fillColor.addEventListener("change", finishStyleChange);
@@ -1252,6 +1341,27 @@ function bindControls() {
   document.querySelector("#fit").addEventListener("click", fitContent);
   document.querySelector("#export-svg").addEventListener("click", exportSvg);
   document.querySelector("#export-png").addEventListener("click", exportPng);
+  fullscreenButton.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (error) {
+      setStatus(`无法切换全屏：${error.message || error}`, "error");
+    }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    const active = Boolean(document.fullscreenElement);
+    fullscreenButton.title = active ? "退出全屏" : "全屏查看";
+    fullscreenButton.setAttribute("aria-label", fullscreenButton.title);
+    fullscreenButton.setAttribute("aria-pressed", String(active));
+  });
+  window.addEventListener("message", (event) => {
+    const request = event.data;
+    if (event.origin !== location.origin || request?.type !== "siyuan-cloud-document-export") return;
+    if (request.asset !== asset) return;
+    if (request.format === "svg") exportSvg();
+    if (request.format === "png") exportPng();
+  });
   document.querySelector("#help-button").addEventListener("click", () => document.querySelector("#shortcut-dialog").showModal());
   document.querySelector("#close-help").addEventListener("click", () => document.querySelector("#shortcut-dialog").close());
   document.querySelector("#reload-remote").addEventListener("click", () => void reloadRemote());
@@ -1275,8 +1385,9 @@ function bindControls() {
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("resize", render);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && revision > savedRevision) void persist(false);
+    if (document.visibilityState === "hidden" && revision > savedRevision && store.canEdit()) void persist(false);
   });
+  window.addEventListener("pagehide", () => viewSession.write({ tool }));
 }
 
 async function reloadRemote() {
@@ -1296,7 +1407,7 @@ async function reloadRemote() {
 }
 
 async function loadInitialDocument() {
-  const remote = parseWhiteboardDocument(await store.loadRemote());
+  const remote = parseWhiteboardDocument(await store.openRemote());
   const recovery = store.readRecovery();
   if (!recovery) return { value: remote, state: "remote" };
   try {
@@ -1313,9 +1424,31 @@ async function start() {
   try {
     const initial = await loadInitialDocument();
     whiteboard = initial.value;
+    const rememberedTool = viewSession.read().tool;
+    if (["select", "hand", "text", "sticky", "rect", "ellipse", "diamond", "connector", "pen"].includes(rememberedTool)) setTool(rememberedTool);
     if (!whiteboard.title || whiteboard.title === "新建白板") whiteboard.title = assetFileName.replace(/(?:\.board)?\.json$/i, "") || "新建白板";
+    document.querySelector("#board-file-name").textContent = assetFileName;
+    document.querySelector("#board-file-name").title = assetFileName;
+    document.title = `${assetFileName} · 白板`;
     resetHistory();
-    if (initial.state === "conflict") {
+    if (!store.canEdit()) {
+      document.querySelector("#main-toolbar")?.setAttribute("inert", "");
+      selectionToolbar?.setAttribute("inert", "");
+      textEditorInput.contentEditable = "false";
+      const stopEdit = (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+      shell.addEventListener("pointerdown", stopEdit, true);
+      shell.addEventListener("dblclick", stopEdit, true);
+      window.addEventListener("keydown", (event) => {
+        const modifier = event.ctrlKey || event.metaKey;
+        const allowed = (modifier && event.key.toLowerCase() === "f")
+          || ["1", "2", "Escape"].includes(event.key);
+        if (!allowed && !event.target?.closest?.("#board-search")) stopEdit(event);
+      }, true);
+      showLeaseState(store, notice, setStatus);
+    } else if (initial.state === "conflict") {
       conflictNotice.hidden = false;
       setStatus("发现未同步的本地修改", "error");
     } else if (initial.state === "recovery") {
@@ -1333,7 +1466,9 @@ async function start() {
     }
   } catch (error) {
     console.error("[Cloud Document Suite] Cannot open whiteboard", error);
-    setStatus(`打开失败：${error.message || error}`, "error");
+    if (!showStoreOpenError(error, store, notice, setStatus)) {
+      setStatus(`打开失败：${error.message || error}`, "error");
+    }
     emptyTip.hidden = true;
   } finally {
     loading.hidden = true;

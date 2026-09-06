@@ -1,4 +1,5 @@
-import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__";
+import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   MAX_RENDER_COLS,
   MAX_RENDER_ROWS,
@@ -46,8 +47,11 @@ import {
 } from "./sheet-workbook.js?v=__PLUGIN_VERSION__";
 
 (() => {
-  const asset = new URLSearchParams(location.search).get("asset");
+  const params = new URLSearchParams(location.search);
+  const asset = params.get("asset");
+  const requestedName = params.get("name")?.split(/[\\/]/).pop()?.trim() || "";
   const assetFileName = (() => {
+    if (requestedName) return requestedName;
     try {
       return decodeURIComponent(String(asset || "").split("/").pop() || "工作簿.xlsx");
     } catch {
@@ -57,6 +61,8 @@ import {
   const documentTitle = assetFileName.replace(/\.xlsx$/i, "") || "工作簿";
   const storageKey = `siyuan-sheet-editor:${asset}`;
   const store = new SiyuanFileStore(asset, storageKey);
+  const viewSession = createEditorSession("sheet", asset);
+  const notice = createOperationNotice();
   const app = document.querySelector("#app");
   const grid = document.querySelector("#grid");
   const tabs = document.querySelector("#tabs");
@@ -89,6 +95,7 @@ import {
   const contextStructureDelete = document.querySelector("#context-structure-delete");
   const operationToast = document.querySelector("#operation-toast");
   const exportButton = document.querySelector("#export");
+  const fullscreenButton = document.querySelector("#fullscreen");
   let model;
   let active = 0;
   let editMode = false;
@@ -111,6 +118,7 @@ import {
   let structureBusy = false;
   let operationToastTimer;
   let exportBusy = false;
+  let viewTimer;
   const readViewSnapshots = new Map();
   const undoStack = [];
   const redoStack = [];
@@ -132,6 +140,7 @@ import {
 
   const setStatus = (text) => {
     status.textContent = sizeWarning ? `${text} · ${sizeWarning}` : text;
+    status.title = status.textContent;
     const normalized = String(text);
     status.dataset.state = normalized.includes("失败") || normalized.includes("冲突")
       ? "error"
@@ -142,16 +151,32 @@ import {
           : "idle";
   };
 
-  function showOperationFeedback(text, kind = "success", duration = 2200) {
+  function showOperationFeedback(text, kind = "success", duration = 2200, undoAction = null) {
     clearTimeout(operationToastTimer);
-    operationToast.textContent = text;
-    operationToast.dataset.kind = kind;
-    operationToast.hidden = false;
-    if (duration > 0) {
-      operationToastTimer = setTimeout(() => {
-        operationToast.hidden = true;
-      }, duration);
-    }
+    operationToast.hidden = true;
+    notice.show(text, {
+      tone: kind === "warning" ? "warning" : "default",
+      duration,
+      actions: typeof undoAction === "function" ? [{ label: "撤销", run: undoAction }] : []
+    });
+  }
+
+  function saveViewState() {
+    clearTimeout(viewTimer);
+    if (!model || !currentSheet()) return;
+    const wrapper = document.querySelector(".grid-wrap");
+    viewSession.write({
+      sheet: currentSheet().name,
+      selectionKind,
+      selection: { ...selection },
+      scrollTop: wrapper?.scrollTop || 0,
+      scrollLeft: wrapper?.scrollLeft || 0
+    });
+  }
+
+  function scheduleViewState() {
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(saveViewState, 180);
   }
 
   function setStructureBusy(busy) {
@@ -488,6 +513,7 @@ import {
     const cell = cellLocator(nextRow, nextCol);
     if (focus) cell?.focus();
     if (scroll) cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    scheduleViewState();
   }
 
   function selectWholeRow(row, extend = false) {
@@ -499,6 +525,7 @@ import {
     selection.row = nextRow;
     selection.col = cols - 1;
     paintSelection();
+    scheduleViewState();
   }
 
   function selectWholeColumn(col, extend = false) {
@@ -510,12 +537,14 @@ import {
     selection.row = rows - 1;
     selection.col = nextCol;
     paintSelection();
+    scheduleViewState();
   }
 
   function selectAllCells() {
     const { rows, cols } = sheetDimensions(currentSheet());
     selectionKind = "cells";
     selection = { anchorRow: 0, anchorCol: 0, row: rows - 1, col: cols - 1 };
+    scheduleViewState();
     paintSelection();
   }
 
@@ -649,7 +678,7 @@ import {
     scheduleSave();
     renderGrid();
     collectSearchMatches(query);
-    showOperationFeedback(`已替换 ${changes.length} 个单元格${skippedFormulas ? `，跳过 ${skippedFormulas} 个公式结果` : ""}`);
+    showOperationFeedback(`已替换 ${changes.length} 个单元格${skippedFormulas ? `，跳过 ${skippedFormulas} 个公式结果` : ""}`, "success", 3600, undo);
   }
 
   const FORMULA_HINTS = {
@@ -852,6 +881,7 @@ import {
         selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
         collectSearchMatches(findInput.value);
         render();
+        scheduleViewState();
       });
       button.addEventListener("dblclick", () => {
         if (editMode) renameSheet();
@@ -1105,7 +1135,7 @@ import {
       for (let col = 0; col < cols; col++) {
         if (mergeCovered.has(`${row}:${col}`)) continue;
         const td = document.createElement("td");
-        td.contentEditable = "plaintext-only";
+        td.contentEditable = store.canEdit() ? "plaintext-only" : "false";
         td.tabIndex = 0;
         td.dataset.row = String(row);
         td.dataset.col = String(col);
@@ -1401,6 +1431,18 @@ import {
     }
   }
 
+  function downloadRecoveryWorkbook() {
+    if (!model) return;
+    try {
+      const bytes = withCanonicalReadView(() => serializeWorkbookModel(XLSX, model));
+      const recoveryName = assetFileName.replace(/\.xlsx$/i, "") + ".recovery.xlsx";
+      downloadBytes(bytes, recoveryName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      showOperationFeedback(`已下载恢复副本 ${recoveryName}`);
+    } catch (error) {
+      showOperationFeedback(`恢复副本生成失败：${error instanceof Error ? error.message : String(error)}`, "warning", 4800);
+    }
+  }
+
   async function persist(force) {
     if (saveInFlight) {
       saveAgain = true;
@@ -1428,6 +1470,14 @@ import {
       } else {
         lastSaveError = error instanceof Error ? error.message : String(error);
         setStatus(`保存失败（本机修改已保留）：${lastSaveError}`);
+        notice.show(`保存失败：${lastSaveError}`, {
+          tone: "error",
+          duration: 0,
+          actions: [
+            { label: "重试", run: () => void persist(false) },
+            { label: "下载恢复副本", run: downloadRecoveryWorkbook }
+          ]
+        });
       }
     } finally {
       saveInFlight = false;
@@ -1722,7 +1772,7 @@ import {
     if (truncatedRows || truncatedCols) {
       showOperationFeedback(`已写入 ${writtenCells} 个单元格；受轻量编辑上限影响，省略 ${truncatedRows} 行、${truncatedCols} 列`, "warning", 4200);
     } else {
-      showOperationFeedback(`已粘贴 ${rowCount} 行 × ${colCount} 列（${writtenCells} 个单元格）`);
+      showOperationFeedback(`已粘贴 ${rowCount} 行 × ${colCount} 列（${writtenCells} 个单元格）`, "success", 3600, undo);
     }
   }
 
@@ -1951,7 +2001,7 @@ import {
       wrapper.scrollLeft = previousScroll.left;
       focusCurrentSelection();
       refreshSearchAfterEdit();
-      showOperationFeedback(`已${verb} ${count} ${noun}（${range}）`);
+      showOperationFeedback(`已${verb} ${count} ${noun}（${range}）`, "success", 3600, undo);
     } catch (error) {
       if (beforeWorkbookState) restoreWorkbookState(XLSX, model, beforeWorkbookState, false);
       const message = `${verb}失败：${error instanceof Error ? error.message : String(error)}`;
@@ -1965,7 +2015,7 @@ import {
   }
 
   async function load() {
-    const remoteModel = parseWorkbookModel(XLSX, await store.loadRemote(), asset);
+    const remoteModel = parseWorkbookModel(XLSX, await store.openRemote(), asset);
     const recovery = store.readRecovery();
     if (!recovery) return { value: remoteModel, state: "remote" };
     const payload = recovery.payload;
@@ -2096,6 +2146,25 @@ import {
     }
   });
   exportButton.addEventListener("click", () => void exportWorkbook());
+  fullscreenButton.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (error) {
+      setStatus(`无法切换全屏：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    const active = Boolean(document.fullscreenElement);
+    fullscreenButton.textContent = active ? "退出全屏" : "全屏";
+    fullscreenButton.title = active ? "退出全屏" : "全屏查看";
+    fullscreenButton.setAttribute("aria-pressed", String(active));
+  });
+  window.addEventListener("message", (event) => {
+    const request = event.data;
+    if (event.origin !== location.origin || request?.type !== "siyuan-cloud-document-export") return;
+    if (request.asset === asset && request.format === "xlsx") void exportWorkbook();
+  });
   addSheetButton.addEventListener("click", () => {
     if (!editMode) return;
     const name = uniqueName("Sheet");
@@ -2243,7 +2312,10 @@ import {
       if (!details.contains(event.target)) details.open = false;
     });
   });
-  document.querySelector(".grid-wrap").addEventListener("scroll", closeStructureContextMenu, { passive: true });
+  document.querySelector(".grid-wrap").addEventListener("scroll", () => {
+    closeStructureContextMenu();
+    scheduleViewState();
+  }, { passive: true });
   window.addEventListener("resize", closeStructureContextMenu);
   window.addEventListener("resize", () => {
     if (!formulaSuggestionMenu.hidden) positionFormulaSuggestions();
@@ -2280,6 +2352,14 @@ import {
       openSearchPanel();
     }
   });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && editMode && model?.operations?.length && !saveInFlight) {
+      finalizeEditSession();
+      clearTimeout(saveTimer);
+      void persist(false);
+    }
+  });
+  window.addEventListener("pagehide", saveViewState);
 
   load().then(({ value, state }) => {
     model = value;
@@ -2288,17 +2368,53 @@ import {
       .filter((warning) => !warning.startsWith("公式"))
       .join("；");
     if (!model.sheets.length) addWorksheet(XLSX, model, "Sheet1", false);
+    const view = viewSession.read();
+    const restoredSheet = model.sheets.findIndex((sheet) => sheet.name === view.sheet);
+    if (restoredSheet >= 0) active = restoredSheet;
+    const dimensions = sheetDimensions(currentSheet());
+    const savedSelection = view.selection && typeof view.selection === "object" ? view.selection : null;
+    if (savedSelection && ["anchorRow", "anchorCol", "row", "col"].every((key) => Number.isFinite(Number(savedSelection[key])))) {
+      selection = {
+        anchorRow: Math.max(0, Math.min(dimensions.rows - 1, Number(savedSelection.anchorRow))),
+        anchorCol: Math.max(0, Math.min(dimensions.cols - 1, Number(savedSelection.anchorCol))),
+        row: Math.max(0, Math.min(dimensions.rows - 1, Number(savedSelection.row))),
+        col: Math.max(0, Math.min(dimensions.cols - 1, Number(savedSelection.col)))
+      };
+      selectionKind = ["cells", "rows", "cols"].includes(view.selectionKind) ? view.selectionKind : "cells";
+    }
     render();
-    if (capabilityBlocked) {
+    if (capabilityBlocked || !store.canEdit()) {
       modeToggle.disabled = true;
-      modeToggle.title = "超出轻量编辑范围，当前为只读预览";
+      modeToggle.title = capabilityBlocked
+        ? "超出轻量编辑范围，当前为只读预览"
+        : "该附件正在另一个页面中编辑";
+    }
+    if (!store.canEdit()) {
+      formulaInput.disabled = true;
+      grid.querySelectorAll("[contenteditable]").forEach((cell) => { cell.contentEditable = "false"; });
+      const stopEdit = (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+      grid.addEventListener("beforeinput", stopEdit, true);
+      grid.addEventListener("paste", stopEdit, true);
+      grid.addEventListener("cut", stopEdit, true);
+      grid.addEventListener("keydown", (event) => {
+        const modifier = event.ctrlKey || event.metaKey;
+        const mutating = event.key.length === 1
+          || ["Backspace", "Delete", "Enter", "F2"].includes(event.key)
+          || (modifier && ["v", "x", "z", "y"].includes(event.key.toLowerCase()));
+        if (mutating) stopEdit(event);
+      }, true);
     }
     requestAnimationFrame(() => {
       const wrapper = document.querySelector(".grid-wrap");
-      wrapper.scrollTop = 0;
-      wrapper.scrollLeft = 0;
+      wrapper.scrollTop = Math.max(0, Number(view.scrollTop) || 0);
+      wrapper.scrollLeft = Math.max(0, Number(view.scrollLeft) || 0);
     });
-    if (state === "conflict") {
+    if (!store.canEdit()) {
+      showLeaseState(store, notice, setStatus);
+    } else if (state === "conflict") {
       setStatus("检测到跨设备保存冲突：当前显示合并后的本机修改，尚未覆盖思源");
       if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前表格覆盖思源中的版本吗？")) {
         void persist(true);
@@ -2313,6 +2429,8 @@ import {
     }
   }).catch((error) => {
     console.error(error);
-    setStatus(error instanceof Error ? error.message : String(error));
+    if (!showStoreOpenError(error, store, notice, setStatus)) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
   });
 })();

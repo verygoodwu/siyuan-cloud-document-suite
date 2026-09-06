@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>文本编辑器</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#fff;--panel:#f7f8fa;--border:#e3e5e8;--text:#202124;--muted:#7a8089;--accent:#4285f4;--accent-soft:#e8f1ff;--danger:#d93025;--gutter:#f7f8fa;--current-line:#f4f8ff}
+    @media(prefers-color-scheme:dark){:root{--bg:#202124;--panel:#292a2d;--border:#3c4043;--text:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8;--accent-soft:#263b5c;--danger:#f28b82;--gutter:#292a2d;--current-line:#253248}}
+    *{box-sizing:border-box}html,body,#app{height:100%;margin:0}body{overflow:hidden;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+    #app{display:flex;flex-direction:column}.toolbar{min-height:43px;display:flex;align-items:center;gap:7px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--panel)}.toolbar-actions{display:flex;min-width:0;align-items:center;gap:7px;overflow-x:auto;scrollbar-width:thin}
+    .file-name{min-width:0;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.kind{padding:2px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-size:11px;text-transform:uppercase}.status{min-width:0;max-width:280px;margin-right:auto;overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}
+    button,input{font:inherit;color:inherit}button{height:29px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);cursor:pointer;white-space:nowrap}button:hover{border-color:var(--accent);color:var(--accent)}button:disabled{cursor:default;opacity:.45}.icon{min-width:30px;padding:0 7px}.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}.more{position:relative}.more>summary{display:flex;height:29px;align-items:center;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);cursor:pointer;list-style:none}.more>summary::-webkit-details-marker{display:none}.more-pop{position:fixed;z-index:20;top:40px;right:10px;display:flex;min-width:190px;flex-direction:column;gap:3px;padding:6px;border:1px solid var(--border);border-radius:8px;background:var(--bg);box-shadow:0 8px 28px #0003}.more-pop button{text-align:left;border:0}.more-pop button:hover{background:var(--accent-soft)}
+    .search{display:flex;align-items:center;gap:6px;padding:6px 10px;overflow-x:auto;border-bottom:1px solid var(--border);background:var(--panel);scrollbar-width:thin}.search[hidden]{display:none}.search input{height:29px;width:min(230px,26vw);padding:4px 8px;border:1px solid var(--border);border-radius:5px;background:var(--bg);outline:none}.search input:focus{border-color:var(--accent)}.match-count{min-width:64px;color:var(--muted)}
+    .workspace{position:relative;min-height:0;flex:1;display:flex;background:var(--bg)}.editor-pane{min-width:0;flex:1;display:grid;grid-template-columns:auto 1fr;overflow:hidden}.gutter{min-width:48px;margin:0;padding:14px 9px 48px 6px;overflow:hidden;border-right:1px solid var(--border);background:var(--gutter);color:var(--muted);text-align:right;white-space:pre;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;user-select:none}.editor-stage{position:relative;min-width:0;overflow:hidden;background:var(--bg)}.current-line{position:absolute;z-index:0;left:0;right:0;height:20.8px;background:var(--current-line);pointer-events:none}.current-line[hidden]{display:none}
+    textarea{position:relative;z-index:1;width:100%;height:100%;resize:none;margin:0;padding:14px 18px 48px;border:0;outline:0;background:transparent;color:var(--text);tab-size:2;white-space:pre;overflow:auto;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;caret-color:var(--accent)}textarea.wrap{white-space:pre-wrap;overflow-wrap:anywhere}.preview{width:50%;height:100%;border:0;border-left:1px solid var(--border);background:#fff}.preview[hidden]{display:none}.workspace.preview-only .editor-pane{display:none}.workspace.preview-only .preview{width:100%;border-left:0}
+    .footer{height:29px;display:flex;align-items:center;gap:14px;padding:0 10px;overflow-x:auto;border-top:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12px;white-space:nowrap;scrollbar-width:thin}.footer .spacer{flex:1}.goto-line{display:flex;align-items:center;gap:5px}.goto-line input{width:62px;height:22px;padding:1px 5px;border:1px solid var(--border);border-radius:4px;background:var(--bg);outline:0}.goto-line input:focus{border-color:var(--accent)}.goto-line button{height:22px;padding:0 7px}.error{color:var(--danger)}
+    @media(max-width:720px){.toolbar{align-items:flex-start;flex-wrap:wrap}.file-name{max-width:48%}.status{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis}.toolbar-actions{width:100%}.preview{width:45%}.gutter{min-width:40px}.footer{gap:9px}.footer [data-compact-hide]{display:none}}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <strong id="file-name" class="file-name">文本文件</strong>
+      <span id="kind" class="kind">TXT</span>
+      <span id="status" class="status">正在加载…</span>
+      <div class="toolbar-actions">
+        <button id="undo" class="icon" type="button" title="撤销（Ctrl+Z）" aria-label="撤销">↶</button>
+        <button id="redo" class="icon" type="button" title="重做（Ctrl+Y）" aria-label="重做">↷</button>
+        <button id="search-toggle" type="button" title="查找（Ctrl+F）">查找</button>
+        <button id="wrap" type="button" title="自动换行">换行</button>
+        <button id="indent" type="button" title="点击切换缩进宽度">缩进 2</button>
+        <button id="preview-toggle" type="button" title="左右分栏安全预览 HTML" hidden>分栏预览</button>
+        <button id="reload" type="button" title="重新读取思源中的原文件">重新加载</button>
+        <button id="save" type="button" title="立即保存（Ctrl+S）">保存</button>
+        <button id="fullscreen" type="button" title="全屏查看" aria-pressed="false">全屏</button>
+        <button id="download" type="button" title="下载真实原文件">导出</button>
+        <details id="more" class="more"><summary>更多</summary><div class="more-pop">
+          <button id="open-original" type="button">打开原文件</button>
+          <button id="copy-path" type="button">复制附件路径</button>
+          <button id="retry-save" type="button" hidden>重试保存</button>
+          <button id="download-recovery" type="button" hidden>下载恢复副本</button>
+        </div></details>
+      </div>
+    </header>
+    <section id="search" class="search" hidden>
+      <input id="find" type="search" placeholder="查找" aria-label="查找内容">
+      <span id="match-count" class="match-count">0 项</span>
+      <button id="previous" type="button">上一个</button>
+      <button id="next" type="button">下一个</button>
+      <input id="replace" type="text" placeholder="替换为" aria-label="替换内容">
+      <button id="replace-one" type="button">替换</button>
+      <button id="replace-all" type="button">全部替换（0）</button>
+      <button id="search-close" class="icon" type="button" aria-label="关闭查找">×</button>
+    </section>
+    <main id="workspace" class="workspace">
+      <div class="editor-pane">
+        <pre id="gutter" class="gutter" aria-hidden="true">1</pre>
+        <div class="editor-stage">
+          <div id="current-line" class="current-line" aria-hidden="true"></div>
+          <textarea id="editor" spellcheck="false" aria-label="文本内容"></textarea>
+        </div>
+      </div>
+      <iframe id="preview" class="preview" title="HTML 安全预览" sandbox="" hidden></iframe>
+    </main>
+    <footer class="footer">
+      <span id="position">行 1，列 1</span>
+      <span id="encoding">UTF-8</span>
+      <span id="newline">LF</span>
+      <span id="statistics">0 行 · 0 字符</span>
+      <span id="saved-at" data-compact-hide>尚未保存</span>
+      <span class="goto-line"><label for="line-number">转到行</label><input id="line-number" type="number" min="1" step="1" inputmode="numeric" aria-label="目标行号"><button id="goto-line" type="button">跳转</button></span>
+      <span class="spacer"></span>
+      <span id="size">0 B</span>
+    </footer>
+  </div>
+  <script type="module" src="./text-editor.js?v=__PLUGIN_VERSION__-text16"></script>
+</body>
+</html>

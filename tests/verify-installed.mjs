@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import { stripKnownTextResponseInjection } from "../static/siyuan-file-store.js";
 
 const base = process.env.SIYUAN_BASE_URL || "http://127.0.0.1:6806";
 const packageName = "siyuan-cloud-document-suite";
-const expectedVersion = "2.1.4";
+const expectedVersion = "2.1.11";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const files = (await readdir("dist", { withFileTypes: true }))
   .filter((entry) => entry.isFile() && entry.name !== "package.zip")
@@ -23,7 +24,7 @@ for (const name of files) {
     mismatches.push({ name, reason: `HTTP ${response.status}` });
     continue;
   }
-  const installed = new Uint8Array(await response.arrayBuffer());
+  const installed = stripKnownTextResponseInjection(new Uint8Array(await response.arrayBuffer()));
   const localHash = digest(local);
   const installedHash = digest(installed);
   const equal = local.length === installed.length && localHash === installedHash;
@@ -38,7 +39,7 @@ const petalsResponse = await fetch(`${base}/api/petal/loadPetals`, {
 });
 const petals = await petalsResponse.json();
 const plugin = petals.data?.find((item) => item.name === packageName);
-const staticAssets = ["whiteboard-editor.html", "whiteboard-editor.js", "whiteboard-model.js", "whiteboard-renderer.js", "whiteboard-layout.js", "whiteboard-interactions.js", "whiteboard-templates.js"];
+const staticAssets = ["whiteboard-editor.html", "whiteboard-editor.js", "whiteboard-model.js", "whiteboard-renderer.js", "whiteboard-layout.js", "whiteboard-interactions.js", "whiteboard-templates.js", "text-editor.html", "text-editor.js", "text-editor-core.js", "pdf-reader.html", "pdf-reader.js", "pdf-reader-core.js", "document-print.html", "document-print.js", "editor-session.js"];
 const staticChecks = [];
 for (const name of staticAssets) {
   const response = await fetch(`${base}/plugins/${packageName}/${name}?v=${expectedVersion}`, {

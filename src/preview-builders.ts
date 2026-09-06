@@ -11,15 +11,19 @@ const escapeLabel = (value: string) => value.replace(/\\/g, "\\\\").replace(/\[/
 const escapeHeading = (value: string) => value.replace(/\r?\n/g, " ").replace(/#/g, "\\#");
 
 export class PreviewBuilders {
-  constructor(private readonly pluginVersion: string, private readonly mmVersion: string) {}
+  constructor(
+    private readonly pluginVersion: string,
+    private readonly mmVersion: string,
+    private readonly textVersion: string
+  ) {}
 
   buildFreeMind(asset: UploadedAsset, xml: string): string {
     const parsed = new DOMParser().parseFromString(xml, "application/xml");
     if (parsed.querySelector("parsererror")) throw new Error("Invalid FreeMind .mm XML");
     const root = Array.from(parsed.documentElement.children).find((child) => child.localName.toLowerCase() === "node");
     if (!root) throw new Error("FreeMind root node not found");
-    const url = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(this.mmVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
+    const url = `/plugins/siyuan-cloud-document-suite/mm-editor.html?v=${encodeURIComponent(this.mmVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
   }
 
   async buildXMind(asset: UploadedAsset, content: ArrayBuffer): Promise<string> {
@@ -49,18 +53,23 @@ export class PreviewBuilders {
   }
 
   buildSpreadsheet(asset: UploadedAsset): string {
-    const url = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(this.pluginVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
+    const url = `/plugins/siyuan-cloud-document-suite/sheet-editor.html?v=${encodeURIComponent(`${this.pluginVersion}-sheet10`)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
   }
 
   buildWhiteboard(asset: UploadedAsset): string {
-    const url = `/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=${encodeURIComponent(this.pluginVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}`;
-    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0"></iframe>`;
+    const url = `/plugins/siyuan-cloud-document-suite/whiteboard-editor.html?v=${encodeURIComponent(`${this.pluginVersion}-board4`)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
+  }
+
+  buildText(asset: UploadedAsset): string {
+    const url = `/plugins/siyuan-cloud-document-suite/text-editor.html?v=${encodeURIComponent(this.textVersion)}&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(480px, calc(100vh - 200px), 720px); min-height: 480px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
   }
 
   buildPdf(asset: UploadedAsset): string {
-    const source = escapeHtml(`/${asset.assetPath}`);
-    return `<iframe src="${source}" data-src="${source}" style="${EMBED_STYLE} height: 78vh; min-height: 640px;" frameborder="0"></iframe>\n\n---\n\n### 附件\n\n📎 ${buildAttachmentMarkdown([asset])}`;
+    const url = `/plugins/siyuan-cloud-document-suite/pdf-reader.html?v=${encodeURIComponent(this.pluginVersion)}-pdf2&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
+    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(520px, calc(100vh - 180px), 780px); min-height: 520px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
   }
 
   private convertXMindJson(value: unknown): string {

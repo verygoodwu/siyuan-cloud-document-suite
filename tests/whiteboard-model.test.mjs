@@ -239,13 +239,17 @@ test("whiteboard editor is packaged through the existing plugin framework", asyn
   assert.match(plugin, /label: "新建白板"/);
   assert.match(plugin, /buildUniqueUploadName\("新建白板\.board\.json"\)/);
   assert.match(previews, /whiteboard-editor\.html/);
-  assert.match(embed, /mm\|sheet\|whiteboard/);
+  assert.match(embed, /mm-editor\|sheet-editor\|whiteboard-editor\|text-editor\|pdf-reader/);
   assert.match(packageScript, /whiteboard-editor\.html/);
   assert.match(packageScript, /whiteboard-model\.js/);
   assert.match(packageScript, /whiteboard-layout\.js/);
   assert.match(packageScript, /whiteboard-interactions\.js/);
   assert.match(packageScript, /whiteboard-templates\.js/);
   assert.match(html, /id="main-toolbar"/);
+  assert.match(html, /id="fullscreen"/);
+  assert.match(html, /whiteboard-editor\.js\?v=__PLUGIN_VERSION__-board5/);
+  assert.match(html, /id="board-search-input"/);
+  assert.match(editor, /collectBoardSearchMatches/);
   assert.match(html, /id="selection-toolbar"/);
   assert.match(html, /id="conflict-notice"/);
   assert.match(html, /id="template-dialog"/);
@@ -254,7 +258,9 @@ test("whiteboard editor is packaged through the existing plugin framework", asyn
   assert.match(html, /#text-editor\{[^}]*display:flex;align-items:center/);
   assert.match(html, /#text-editor-input\{[^}]*width:100%;max-height:100%/);
   assert.match(editor, /new SiyuanFileStore\(asset, storageKey\)/);
+  assert.match(editor, /requestFullscreen/);
   assert.match(editor, /setTimeout\(\(\) => void persist\(false\), 700\)/);
+  assert.match(editor, /function setTool\(next\)[\s\S]*viewSession\.write\(\{ tool \}\)/);
   assert.match(editor, /createConnectedNode/);
   assert.match(editor, /buildWhiteboardSvg/);
   assert.match(editor, /nodesInMarquee/);

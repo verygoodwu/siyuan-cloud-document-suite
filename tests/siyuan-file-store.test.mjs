@@ -2,9 +2,38 @@ import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
-import { contentHash, SaveConflictError, SiyuanFileStore } from "../static/siyuan-file-store.js";
+import { contentHash, EditLeaseError, MissingAssetError, SaveConflictError, SiyuanFileStore, stripKnownTextResponseInjection } from "../static/siyuan-file-store.js";
+import { editIndent, lineBlockRange, offsetForLine } from "../static/text-editor-core.js";
 
 const encoder = new TextEncoder();
+
+test("text editor indentation supports caret, multiline, and outdent", () => {
+  assert.deepEqual(lineBlockRange("one\ntwo\nthree", 4, 7), {
+    start: 4, end: 7, blockStart: 4, blockEnd: 7
+  });
+
+  const caret = editIndent("one", 1, 1, 2);
+  assert.equal(caret.value, "o  ne");
+  assert.deepEqual([caret.selectionStart, caret.selectionEnd], [3, 3]);
+
+  const multiline = editIndent("one\ntwo\nthree", 0, 7, 4);
+  assert.equal(multiline.value, "    one\n    two\nthree");
+  assert.deepEqual([multiline.selectionStart, multiline.selectionEnd], [0, 15]);
+
+  const outdented = editIndent("    one\n\ttwo", 0, 12, 4, true);
+  assert.equal(outdented.value, "one\ntwo");
+  assert.deepEqual([outdented.selectionStart, outdented.selectionEnd], [0, 7]);
+
+  const caretOutdent = editIndent("    one", 6, 6, 4, true);
+  assert.equal(caretOutdent.value, "one");
+  assert.deepEqual([caretOutdent.selectionStart, caretOutdent.selectionEnd], [2, 2]);
+});
+
+test("text editor line navigation clamps to the document", () => {
+  assert.deepEqual(offsetForLine("one\ntwo\nthree", 2), { line: 2, offset: 4, total: 3 });
+  assert.deepEqual(offsetForLine("one\ntwo\nthree", 99), { line: 3, offset: 8, total: 3 });
+  assert.deepEqual(offsetForLine("one\ntwo\nthree", -3), { line: 1, offset: 0, total: 3 });
+});
 
 function replaceGlobal(name, value) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -43,6 +72,43 @@ test("encoded traversal cannot escape the assets directory", () => {
   } finally {
     restoreLocation();
   }
+});
+
+test("raw text mode reads exact asset bytes through the SiYuan file API", async (context) => {
+  const restoreLocation = replaceGlobal(
+    "location",
+    new URL("http://127.0.0.1:6806/plugins/siyuan-cloud-document-suite/text-editor.html")
+  );
+  const expected = encoder.encode("<html><head></head><body><script>original()</script></body></html>");
+  const injected = encoder.encode('<html><head><script src="//local.adguard.org?type=content-script&amp;app=browser"></script><script src="//local.adguard.org?name=AdGuard&amp;type=user-script"></script></head><body><script>original()</script></body></html>');
+  const restoreFetch = replaceGlobal("fetch", async (input, init = {}) => {
+    assert.equal(String(input), "/api/file/getFile");
+    assert.equal(init.method, "POST");
+    assert.deepEqual(JSON.parse(String(init.body)), { path: "/data/assets/example.html" });
+    return new Response(injected, { status: 200 });
+  });
+  context.after(() => {
+    restoreFetch();
+    restoreLocation();
+  });
+
+  const store = new SiyuanFileStore("/assets/example.html", "recovery:raw", { rawApi: true });
+  assert.deepEqual(await store.fetchRemote(), expected);
+});
+
+test("known response injection removal preserves unrelated HTML scripts and UTF-8 BOM", () => {
+  const original = '<html><head>\n</head><body><script src="app.js"></script></body></html>';
+  const injected = original.replace(
+    "</head>",
+    '<script nonce="x" src="//local.adguard.org?name=AdGuard%20Extra&amp;type=user-script"></script></head>'
+  );
+  const payload = encoder.encode(injected);
+  const withBom = new Uint8Array(payload.length + 3);
+  withBom.set([0xef, 0xbb, 0xbf]);
+  withBom.set(payload, 3);
+  const cleaned = stripKnownTextResponseInjection(withBom);
+  assert.deepEqual(Array.from(cleaned.subarray(0, 3)), [0xef, 0xbb, 0xbf]);
+  assert.equal(new TextDecoder().decode(cleaned.subarray(3)), original);
 });
 
 test("marketplace icon stays within the Bazaar size limit", async () => {
@@ -254,9 +320,115 @@ test("a deleted remote asset is never recreated by an open editor", async (conte
   await store.loadRemote();
   store.cacheRecovery({ revision: "unsaved" });
   deleted = true;
-  await assert.rejects(() => store.save(encoder.encode("after")), /读取附件失败：HTTP 404/);
+  await assert.rejects(
+    () => store.save(encoder.encode("after")),
+    (error) => error instanceof MissingAssetError && error.code === "ASSET_MISSING"
+  );
   assert.equal(putCalls, 0);
   assert.deepEqual(store.readRecovery()?.payload, { revision: "unsaved" });
+});
+
+test("a missing asset can be explicitly restored from its verified browser backup", async (context) => {
+  const restoreLocation = replaceGlobal(
+    "location",
+    new URL("http://nas.local:6806/plugins/siyuan-cloud-document-suite/mm-editor.html")
+  );
+  context.after(restoreLocation);
+  const backup = encoder.encode("recoverable-mm");
+  const backupStore = {
+    read: async () => backup,
+    write: async () => true
+  };
+  let remote = null;
+  let putCalls = 0;
+  const restoreFetch = replaceGlobal("fetch", async (input, init = {}) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/assets/missing.mm") {
+      return remote ? new Response(remote, { status: 200 }) : new Response("missing", { status: 404 });
+    }
+    if (url.pathname === "/api/file/putFile") {
+      putCalls += 1;
+      assert.equal(init.body.get("path"), "/data/assets/missing.mm");
+      remote = new Uint8Array(await init.body.get("file").arrayBuffer());
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  context.after(restoreFetch);
+
+  const store = new SiyuanFileStore("/assets/missing.mm", "recovery:missing", { backupStore });
+  await assert.rejects(
+    () => store.loadRemote(),
+    (error) => error instanceof MissingAssetError && error.recoverable === true
+  );
+  assert.deepEqual(await store.restoreBackup(), backup);
+  assert.equal(putCalls, 1);
+  assert.deepEqual(remote, backup);
+});
+
+test("NAS edit leases make a second browser session read-only without sync files", async (context) => {
+  const restoreLocation = replaceGlobal(
+    "location",
+    new URL("http://nas.local:6806/plugins/siyuan-cloud-document-suite/mm-editor.html")
+  );
+  context.after(restoreLocation);
+  const files = new Map();
+  let assetPuts = 0;
+  const restoreFetch = replaceGlobal("fetch", async (input, init = {}) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/api/file/getFile") {
+      const path = JSON.parse(String(init.body)).path;
+      if (!files.has(path)) return Response.json({ code: 404, msg: "", data: null }, { status: 202 });
+      return new Response(files.get(path), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname === "/api/file/putFile") {
+      const path = init.body.get("path");
+      if (path === "/temp/siyuan-cloud-document-suite/edit-locks") {
+        return Response.json({ code: 0, msg: "", data: null });
+      }
+      if (path.startsWith("/temp/siyuan-cloud-document-suite/edit-locks/")) {
+        files.set(path, await init.body.get("file").text());
+      } else {
+        assetPuts += 1;
+      }
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    if (url.pathname === "/api/file/removeFile") {
+      files.delete(JSON.parse(String(init.body)).path);
+      return Response.json({ code: 0, msg: "", data: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  context.after(restoreFetch);
+
+  const first = new SiyuanFileStore("/assets/shared.mm", "recovery:first");
+  const second = new SiyuanFileStore("/assets/shared.mm", "recovery:second");
+  assert.equal((await first.acquireEditLease()).acquired, true);
+  assert.equal((await second.acquireEditLease()).acquired, false);
+  assert.equal(second.canEdit(), false);
+  await assert.rejects(() => second.save(encoder.encode("blocked")), EditLeaseError);
+  assert.equal(assetPuts, 0);
+  await first.releaseEditLease();
+});
+
+test("plugin creation is two-phase and diagnostics stay outside synchronized data", async () => {
+  const [kernelClient, documentCreator, diagnostics, pluginSource, fileStore, editorSession] = await Promise.all([
+    readFile(new URL("../src/kernel-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/diagnostics.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../static/siyuan-file-store.js", import.meta.url), "utf8"),
+    readFile(new URL("../static/editor-session.js", import.meta.url), "utf8")
+  ]);
+  assert.match(kernelClient, /await this\.verifyAsset\(assetPath, expected\)/);
+  assert.match(documentCreator, /"initializing", true/);
+  assert.match(documentCreator, /await this\.api\.verifyAsset\(asset\.assetPath\)/);
+  assert.match(documentCreator, /"ready", true/);
+  assert.match(fileStore, /LEASE_DIRECTORY = "\/temp\/siyuan-cloud-document-suite\/edit-locks"/);
+  assert.match(fileStore, /class MissingAssetError/);
+  assert.match(editorSession, /label: "恢复附件"/);
+  assert.doesNotMatch(diagnostics, /drop-debug\.json|this\.save\(/);
+  assert.doesNotMatch(pluginSource, /new Diagnostics\([^)]*saveData/);
 });
 
 test("an external asset update triggers conflict protection and keeps recovery", async (context) => {
@@ -296,15 +468,25 @@ test("an external asset update triggers conflict protection and keeps recovery",
 });
 
 test("editor sources keep automatic save and readable borderless layouts", async () => {
-  const [sheetHtml, sheetScript, mindHtml, mindScript, pluginSource, packageScript, documentCreatorSource, embedSource] = await Promise.all([
+  const [sheetHtml, sheetScript, mindHtml, mindScript, whiteboardScript, pluginSource, packageScript, documentCreatorSource, documentExportSource, embedSource, documentPrintHtml, documentPrintScript, textHtml, textScript, fileTypesSource, previewSource, pdfReaderHtml, pdfReaderScript] = await Promise.all([
     readFile(new URL("../static/sheet-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/sheet-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.html", import.meta.url), "utf8"),
     readFile(new URL("../static/mm-editor.js", import.meta.url), "utf8"),
+    readFile(new URL("../static/whiteboard-editor.js", import.meta.url), "utf8"),
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/package.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/document-creator.ts", import.meta.url), "utf8"),
-    readFile(new URL("../src/embed-manager.ts", import.meta.url), "utf8")
+    readFile(new URL("../src/document-export-menu.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/embed-manager.ts", import.meta.url), "utf8"),
+    readFile(new URL("../static/document-print.html", import.meta.url), "utf8"),
+    readFile(new URL("../static/document-print.js", import.meta.url), "utf8"),
+    readFile(new URL("../static/text-editor.html", import.meta.url), "utf8"),
+    readFile(new URL("../static/text-editor.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/file-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/preview-builders.ts", import.meta.url), "utf8"),
+    readFile(new URL("../static/pdf-reader.html", import.meta.url), "utf8"),
+    readFile(new URL("../static/pdf-reader.js", import.meta.url), "utf8")
   ]);
 
   assert.doesNotMatch(sheetHtml, /id="save"/);
@@ -361,7 +543,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /sameRowTolerance/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
   assert.match(mindScript, /return `M \$\{parentEdge\} \$\{lineY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm47/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm50/);
   assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);
@@ -405,7 +587,11 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(pluginSource, /type: "submenu"/);
   assert.match(pluginSource, /label: "创建文件"/);
   assert.match(pluginSource, /label: "新建脑图（\.mm）"/);
-  assert.match(pluginSource, /label: "新建 Word 文档"/);
+  assert.match(pluginSource, /label: "新建文档（可导出 Word\/PDF）"/);
+  assert.match(pluginSource, /label: "新建文本文件（\.txt）"/);
+  assert.match(pluginSource, /label: "新建 HTML 文件（\.html）"/);
+  assert.match(pluginSource, /asset\.documentKind = "text"/);
+  assert.match(pluginSource, /isEditableTextFile\(file\.name\)/);
   assert.match(pluginSource, /label: "新建 Excel 工作簿"/);
   assert.match(pluginSource, /id: "cloud-document-suite-status"/);
   assert.match(pluginSource, /label: "云文档套件"/);
@@ -414,11 +600,104 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(pluginSource, /rootItems\.insertBefore\(createItem, replaceItem\.nextElementSibling\)/);
   assert.match(pluginSource, /separatorBeforeClose/);
   assert.match(documentCreatorSource, /async resolveNotebookId/);
+  assert.match(documentCreatorSource, /custom-cloud-document-kind/);
+  assert.match(documentCreatorSource, /\/api\/attr\/setBlockAttrs/);
+  assert.match(documentExportSource, /\/api\/attr\/getBlockAttrs/);
+  assert.match(documentExportSource, /\/api\/block\/getBlockKramdown/);
+  assert.match(documentExportSource, /label: "导出文件"/);
+  assert.match(documentExportSource, /promoteBelowCreateFile/);
+  assert.match(documentExportSource, /cloud-document-create-menu/);
+  assert.match(documentExportSource, /rootItems\.insertBefore\(exportItem, createItem\.nextElementSibling\)/);
+  assert.doesNotMatch(documentExportSource, /\[data-id=\"export\"\] > \.b3-menu__submenu/);
+  assert.match(documentExportSource, /云文档：导出 Word \.docx/);
+  assert.match(documentExportSource, /云文档：导出 PDF/);
+  assert.match(documentExportSource, /云文档：导出脑图 \.mm/);
+  assert.match(documentExportSource, /云文档：导出表格 \.xlsx/);
+  assert.match(documentExportSource, /云文档：导出白板 SVG/);
+  assert.match(documentExportSource, /云文档：导出白板 PNG/);
+  assert.match(documentExportSource, /云文档：下载原始文本文件/);
+  assert.match(documentExportSource, /function textExportLabel/);
+  assert.match(documentExportSource, /云文档：导出 \$\{display\} \.\$\{extension\}/);
+  assert.match(documentExportSource, /decoded\.split\("\/"\)\.includes\("\.\."\)/);
+  assert.match(documentExportSource, /\/api\/export\/exportDocx/);
+  assert.match(documentExportSource, /attachmentByExtension\(markup, "docx"\)/);
+  assert.match(documentExportSource, /documentTitle === "新建 Word 文档"/);
+  assert.match(documentExportSource, /document-print\.html/);
+  assert.match(documentExportSource, /electronIpcRenderer/);
+  assert.match(documentExportSource, /cmd: "getContentsId"/);
+  assert.match(documentExportSource, /ipcRenderer\.send\("siyuan-export-newwindow", previewUrl\.href\)/);
+  assert.doesNotMatch(documentExportSource, /document\.body\.append\(frame\)/);
+  assert.match(documentPrintHtml, /document-print\.js\?v=__PLUGIN_VERSION__-pdf-native1/);
+  assert.match(documentPrintHtml, /id="page-size"/);
+  assert.match(documentPrintHtml, /id="margin-type"/);
+  assert.match(documentPrintHtml, /id="landscape"/);
+  assert.match(documentPrintHtml, /id="paged"/);
+  assert.match(documentPrintScript, /\/api\/export\/exportPreviewHTML/);
+  assert.match(documentPrintScript, /cmd: "showOpenDialog"/);
+  assert.match(documentPrintScript, /ipc\.send\("siyuan-export-pdf"/);
+  assert.match(documentPrintScript, /printBackground: true/);
+  assert.match(documentPrintScript, /pageSize: customPageSize \|\| pageSize/);
+  assert.doesNotMatch(documentPrintScript, /setTimeout\(\(\) => window\.print/);
+  assert.match(packageScript, /static\/document-print\.html/);
+  assert.match(packageScript, /static\/document-print\.js/);
+  assert.match(packageScript, /static\/text-editor\.html/);
+  assert.match(packageScript, /static\/text-editor\.js/);
+  assert.match(packageScript, /static\/text-editor-core\.js/);
+  assert.match(packageScript, /static\/pdf-reader\.html/);
+  assert.match(packageScript, /static\/pdf-reader\.js/);
+  assert.match(packageScript, /static\/pdf-reader-core\.js/);
+  assert.match(previewSource, /text-editor\.html/);
+  assert.match(previewSource, /pdf-reader\.html/);
+  assert.match(previewSource, /allow="fullscreen" allowfullscreen/);
+  assert.match(fileTypesSource, /EDITABLE_TEXT_EXTENSIONS/);
+  assert.match(fileTypesSource, /"txt".*"html".*"htm".*"css".*"js"/s);
+  assert.match(textHtml, /id="editor"/);
+  assert.match(textHtml, /id="preview"[^>]*sandbox=""/);
+  assert.match(textHtml, /id="current-line"/);
+  assert.match(textHtml, /id="indent"/);
+  assert.match(textHtml, /id="reload"/);
+  assert.match(textHtml, /id="line-number"[^>]*type="number"/);
+  assert.match(textHtml, /id="newline">LF<\/span>[\s\S]*id="statistics"[\s\S]*<span class="goto-line"/);
+  assert.match(textHtml, /text-editor\.js\?v=__PLUGIN_VERSION__-text16/);
+  assert.match(textHtml, /id="fullscreen"/);
+  assert.match(textScript, /new SiyuanFileStore\(asset/);
+  assert.match(textScript, /\{ rawApi: true \}/);
+  assert.match(textScript, /store\.cacheRecovery/);
+  assert.match(textScript, /await store\.save\(bytes\)/);
+  assert.match(textScript, /savingRevision === editRevision/);
+  assert.match(textScript, /function changeIndent\(outdent\)/);
+  assert.match(textScript, /from "\.\/text-editor-core\.js\?v=__PLUGIN_VERSION__-text15"/);
+  assert.match(textScript, /createEditorSession\("text", asset\)/);
+  assert.match(textScript, /下载恢复副本/);
+  assert.match(textScript, /requestFullscreen/);
+  assert.match(textScript, /event\.preventDefault\(\);\s*goToLine\(\);/);
+  assert.match(textScript, /changeIndent\(event\.shiftKey\)/);
+  assert.match(textScript, /function goToLine\(\)/);
+  assert.match(textScript, /async function reloadRemote\(\)/);
+  assert.match(textScript, /PREFERENCES_KEY/);
+  assert.match(textScript, /new TextDecoder\("utf-8", \{ fatal: true \}\)/);
+  assert.match(textScript, /siyuan-cloud-document-export/);
+  assert.match(textHtml, /id="statistics"/);
+  assert.match(textHtml, /id="download-recovery"/);
+  assert.match(textScript, /beforeunload/);
+  assert.match(textScript, /将替换 \$\{count\} 处内容/);
+  assert.match(textScript, /`导出 \.\$\{extension\}`/);
+  assert.doesNotMatch(textScript, /eval\(|new Function\(/);
+  assert.match(pdfReaderHtml, /id="viewer"[^>]*title="PDF 原生阅读器"/);
+  assert.match(pdfReaderHtml, /id="error-panel"/);
+  assert.match(pdfReaderHtml, /id="fullscreen"/);
+  assert.match(pdfReaderScript, /normalizePdfAsset/);
+  assert.match(pdfReaderScript, /headers: \{ Range: "bytes=0-1023" \}/);
+  assert.match(pdfReaderScript, /hasPdfHeader/);
+  assert.match(pdfReaderScript, /viewer\.contentWindow\?\.print\(\)/);
+  assert.match(sheetScript, /siyuan-cloud-document-export/);
+  assert.match(mindScript, /siyuan-cloud-document-export/);
+  assert.match(whiteboardScript, /siyuan-cloud-document-export/);
   assert.match(pluginSource, /this\.documents\.createRootDocuments\(notebook, \[asset\]\)/);
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.match(sheetScript, /grid\.addEventListener\("paste"/);
   assert.match(sheetScript, /grid\.addEventListener\("copy"/);
-  assert.match(sheetScript, /td\.contentEditable = "plaintext-only"/);
+  assert.match(sheetScript, /td\.contentEditable = store\.canEdit\(\) \? "plaintext-only" : "false"/);
   assert.doesNotMatch(sheetScript, /td\.contentEditable = editMode/);
   assert.doesNotMatch(sheetScript, /粘贴内容请先进入编辑模式/);
   assert.match(sheetScript, /简约模式 · 可直接编辑单元格并自动写入思源/);
@@ -436,7 +715,10 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetHtml, /id="formula-suggestions"/);
   assert.match(sheetHtml, /id="formula-suggestion-menu"/);
   assert.match(sheetHtml, /id="selection-summary"/);
-  assert.match(sheetHtml, /sheet-editor\.js\?v=__PLUGIN_VERSION__-simple7/);
+  assert.match(sheetHtml, /sheet-editor\.js\?v=__PLUGIN_VERSION__-simple11/);
+  assert.match(sheetScript, /createEditorSession\("sheet", asset\)/);
+  assert.match(sheetHtml, /id="fullscreen"/);
+  assert.match(sheetScript, /requestFullscreen/);
   assert.match(sheetScript, /setCellsText\(XLSX, model, sheet\.name, changes\)/);
   assert.match(sheetScript, /公式结果不会被直接替换/);
   assert.match(sheetScript, /const FORMULA_HINTS/);
@@ -503,13 +785,19 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /if \(key === "y" \|\| \(key === "z" && event\.shiftKey\)\) mind\.redo\(\);[\s\S]*else mind\.undo\(\)/);
   assert.match(pluginSource, /\$\{CLOUD_DOCUMENT_IFRAME\}\) \.protyle-action__drag/);
   assert.match(packageScript, /copyFile\("static\/mm-workspace\.js", "dist\/mm-workspace\.js"\)/);
-  assert.match(sheetScript, /wrapper\.scrollTop = 0/);
+  assert.match(sheetScript, /wrapper\.scrollTop = Math\.max\(0, Number\(view\.scrollTop\) \|\| 0\)/);
   assert.match(sheetScript, /\.\/siyuan-file-store\.js\?v=__PLUGIN_VERSION__/);
   assert.match(sheetScript, /\.\/sheet-workbook\.js\?v=__PLUGIN_VERSION__/);
   assert.match(sheetScript, /setTimeout\(\(\) => void persist\(false\), 700\)/);
   assert.match(mindScript, /setTimeout\(\(\) => void persistMind\(false\), 700\)/);
   assert.match(embedSource, /class EmbedManager/);
-  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm47`/);
+  assert.match(embedSource, /`\$\{this\.pluginVersion\}-sheet10`/);
+  assert.match(embedSource, /`\$\{this\.pluginVersion\}-board4`/);
+  assert.match(embedSource, /`\$\{this\.pluginVersion\}-pdf2`/);
+  assert.match(embedSource, /url\.searchParams\.set\("name", title\)/);
+  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm49`/);
+  assert.match(pluginSource, /const TEXT_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-text15`/);
+  assert.match(pluginSource, /pdf-reader\.html/);
   assert.match(pluginSource, /searchParams\.set\("v", editorVersion\)/);
   assert.match(embedSource, /refresh\(\)/);
   assert.match(embedSource, /affects\(records:/);

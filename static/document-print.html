@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN" data-theme-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <base href="/">
+  <title>导出 PDF</title>
+  <link rel="stylesheet" href="/stage/build/export/base.css">
+  <link rel="stylesheet" href="/appearance/themes/daylight/theme.css">
+  <script src="/stage/protyle/js/protyle-html.js"></script>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; }
+    body { margin: 0; overflow: hidden; color: var(--b3-theme-on-background, #1f2329); background: var(--b3-body-background, #eef0f4); font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #preview-container { position: fixed; inset: 0 280px 0 0; overflow: auto; padding: 24px 36px 48px; }
+    #preview-page { width: 794px; min-height: 1123px; margin: 0 auto; padding: 1in .54in; background: var(--b3-theme-background, #fff); box-shadow: 0 5px 24px rgb(0 0 0 / 12%); transform-origin: top center; }
+    #preview { min-height: 100%; overflow: visible; }
+    #preview img { max-width: 100%; height: auto; }
+    #preview table { max-width: 100%; }
+    #action { position: fixed; inset: 0 0 0 auto; z-index: 2; display: flex; width: 280px; flex-direction: column; overflow: hidden; border-left: 1px solid var(--b3-theme-surface-lighter, #e5e6eb); background: var(--b3-theme-background, #fff); }
+    #options { flex: 1; overflow: auto; padding: 14px 12px 92px; }
+    .option { display: block; margin: 0; padding: 10px 0 12px; border-bottom: 1px solid var(--b3-theme-surface-lighter, #e5e6eb); color: var(--b3-theme-on-surface, #60656f); }
+    .option-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+    .option select, .option input[type="text"], .option input[type="number"] { width: 100%; }
+    .option input[type="range"] { width: calc(100% - 34px); vertical-align: middle; }
+    .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .switch-row .b3-switch { flex: none; }
+    #scale-value { display: inline-block; width: 30px; text-align: right; }
+    #custom-margins { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+    #custom-margins label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+    #custom-margins input { min-width: 0; }
+    #custom-title-panel { margin-top: 8px; }
+    .hidden { display: none !important; }
+    #status { min-height: 22px; padding: 8px 12px; color: var(--b3-theme-on-surface, #60656f); font-size: 12px; }
+    #status.error { color: var(--b3-theme-error, #d23f31); }
+    #actions { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 8px; padding: 12px; border-top: 1px solid var(--b3-theme-surface-lighter, #e5e6eb); background: var(--b3-theme-background, #fff); }
+    .b3-button[disabled] { cursor: wait; opacity: .55; }
+    body.exporting { overflow: visible; background: var(--b3-theme-background, #fff); }
+    body.exporting #action { display: none; }
+    body.exporting #preview-container { position: static; overflow: visible; padding: 0; }
+    body.exporting #preview-page { width: auto !important; min-height: 0 !important; margin: 0; padding: 6px 0 0 !important; box-shadow: none; zoom: 1 !important; }
+    @media (max-width: 760px) {
+      #preview-container { right: 236px; padding: 16px; }
+      #action { width: 236px; }
+    }
+    @media print {
+      #action { display: none; }
+      #preview-container { position: static; overflow: visible; padding: 0; }
+      #preview-page { width: auto !important; min-height: 0 !important; margin: 0; padding: 0 !important; box-shadow: none; zoom: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="preview-container">
+    <main id="preview-page"><div id="preview" class="protyle-wysiwyg"></div></main>
+  </div>
+  <aside id="action" aria-label="PDF 导出设置">
+    <div id="options">
+      <label class="option">
+        <span class="option-title">页面大小</span>
+        <select id="page-size" class="b3-select">
+          <option value="A3">A3</option><option value="A4" selected>A4</option><option value="A5">A5</option>
+          <option value="Letter">Letter</option><option value="Legal">Legal</option><option value="Tabloid">Tabloid</option>
+        </select>
+      </label>
+      <label class="option">
+        <span class="option-title">页面边距</span>
+        <select id="margin-type" class="b3-select">
+          <option value="default" selected>默认</option><option value="none">无</option><option value="printableArea">最小</option><option value="custom">自定义</option>
+        </select>
+        <span id="custom-margins" class="hidden">
+          <label>上 <input id="margin-top" class="b3-text-field" type="number" min="0" max="5" step="0.01" value="1"></label>
+          <label>右 <input id="margin-right" class="b3-text-field" type="number" min="0" max="5" step="0.01" value="0.54"></label>
+          <label>下 <input id="margin-bottom" class="b3-text-field" type="number" min="0" max="5" step="0.01" value="1"></label>
+          <label>左 <input id="margin-left" class="b3-text-field" type="number" min="0" max="5" step="0.01" value="0.54"></label>
+        </span>
+      </label>
+      <label class="option">
+        <span class="option-title">页面缩放</span>
+        <input id="scale" type="range" min="0.5" max="2" step="0.05" value="1"><span id="scale-value">1</span>
+      </label>
+      <label class="option switch-row"><span>横向页面</span><input id="landscape" class="b3-switch" type="checkbox"></label>
+      <label class="option switch-row"><span>嵌入资源文件</span><input id="embed-assets" class="b3-switch" type="checkbox" checked></label>
+      <label class="option switch-row"><span>保持折叠状态</span><input id="keep-fold" class="b3-switch" type="checkbox"></label>
+      <div class="option">
+        <label class="switch-row"><span>添加文档标题</span><input id="add-title" class="b3-switch" type="checkbox" checked></label>
+        <div id="custom-title-panel"><input id="custom-title" class="b3-text-field" type="text" placeholder="标题"></div>
+      </div>
+      <label class="option switch-row"><span>合并子文档</span><input id="merge-subdocs" class="b3-switch" type="checkbox"></label>
+      <label class="option switch-row"><span>导出 PDF 水印</span><input id="watermark" class="b3-switch" type="checkbox"></label>
+      <label class="option switch-row"><span>分页</span><input id="paged" class="b3-switch" type="checkbox" checked></label>
+    </div>
+    <div id="status">正在生成预览…</div>
+    <footer id="actions">
+      <button id="cancel" class="b3-button b3-button--cancel" type="button">取消</button>
+      <button id="confirm" class="b3-button b3-button--text" type="button" disabled>确定</button>
+    </footer>
+  </aside>
+  <script src="/plugins/siyuan-cloud-document-suite/document-print.js?v=__PLUGIN_VERSION__-pdf-native1"></script>
+</body>
+</html>
