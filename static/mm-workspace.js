@@ -5,6 +5,21 @@ function normalizedText(value) {
     .toLocaleLowerCase("zh-CN");
 }
 
+export function calculateMindEditorRect(hostRect, topicRect, hostWidth, hostHeight) {
+  const scaleX = Number.isFinite(hostRect?.width) && hostRect.width > 0 && hostWidth > 0
+    ? hostRect.width / hostWidth
+    : 1;
+  const scaleY = Number.isFinite(hostRect?.height) && hostRect.height > 0 && hostHeight > 0
+    ? hostRect.height / hostHeight
+    : 1;
+  return {
+    left: (topicRect.left - hostRect.left) / scaleX,
+    top: (topicRect.top - hostRect.top) / scaleY,
+    width: topicRect.width / scaleX,
+    height: topicRect.height / scaleY
+  };
+}
+
 export function flattenMindNodes(root) {
   if (!root) return [];
   const rows = [];

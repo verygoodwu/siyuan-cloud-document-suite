@@ -4,8 +4,30 @@ import test from "node:test";
 
 import { contentHash, EditLeaseError, MissingAssetError, SaveConflictError, SiyuanFileStore, stripKnownTextResponseInjection } from "../static/siyuan-file-store.js";
 import { editIndent, lineBlockRange, offsetForLine } from "../static/text-editor-core.js";
+import { calculateMindEditorRect } from "../static/mm-workspace.js";
 
 const encoder = new TextEncoder();
+
+test("mind editor overlay follows the rendered topic through layout translation and zoom", () => {
+  assert.deepEqual(
+    calculateMindEditorRect(
+      { left: 100, top: 50, width: 1000, height: 600 },
+      { left: 340, top: 194, width: 120, height: 42 },
+      1000,
+      600
+    ),
+    { left: 240, top: 144, width: 120, height: 42 }
+  );
+  assert.deepEqual(
+    calculateMindEditorRect(
+      { left: 100, top: 50, width: 500, height: 300 },
+      { left: 220, top: 122, width: 60, height: 21 },
+      1000,
+      600
+    ),
+    { left: 240, top: 144, width: 120, height: 42 }
+  );
+});
 
 test("text editor indentation supports caret, multiline, and outdent", () => {
   assert.deepEqual(lineBlockRange("one\ntwo\nthree", 4, 7), {
@@ -516,7 +538,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindHtml, /id="view-style"[^>]*>层级样式/);
   assert.match(mindHtml, /body\.hierarchy-view me-tpc\[data-depth="1"\]/);
   assert.match(mindHtml, /me-tpc\.selected:not\(\[data-depth="0"\]\).*background:#fff!important.*box-shadow:0 0 0 2px #3478f6!important/);
-  assert.match(mindHtml, /#input-box\{[^}]*max-width:min\(480px[^}]*outline:0!important[^}]*box-shadow:0 0 0 2px #3478f6!important/);
+  assert.match(mindHtml, /#input-box\{[^}]*margin:0!important[^}]*max-width:min\(480px[^}]*outline:0!important[^}]*box-shadow:0 0 0 2px #3478f6!important/);
   assert.match(mindScript, /CLOUD_VIEW_STYLE/);
   assert.match(mindScript, /cloudViewStyle === "hierarchy"/);
   assert.match(mindScript, /contextMenu: \{ locale: zhCnMenu, focus: true, link: false \}/);
@@ -537,7 +559,8 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /function redrawVisibleBranches\(\)/);
   assert.match(mindScript, /path\.setAttribute\("d", branchPathFromRects/);
   assert.match(mindScript, /redrawVisibleBranches\(\);/);
-  assert.match(mindScript, /if \(operation\?\.name === "beginEdit"\) \{[\s\S]*pendingKeyboardAdd = undefined;[\s\S]*return;[\s\S]*\}/);
+  assert.match(mindScript, /if \(operation\?\.name === "beginEdit"\) \{[\s\S]*pendingKeyboardAdd = undefined;[\s\S]*queueMindInputAlignment\(mind, operation\?\.obj\?\.id\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(mindScript, /const editingNodeId = target\.dataset\.cloudTopicId \|\| target\.dataset\.keyboardNodeId/);
   assert.match(mindScript, /scheduleMindPersistence = \(\) =>/);
   assert.match(mindScript, /for \(const historyAction of \["undo", "redo"\]\)/);
   assert.match(mindScript, /const result = nativeHistoryAction\(\.\.\.args\);[\s\S]*scheduleMindPersistence\(\);[\s\S]*refreshDecoratedLayout\(mind\)/);
@@ -545,7 +568,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /sameRowTolerance/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
   assert.match(mindScript, /return `M \$\{parentEdge\} \$\{lineY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm50/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm51/);
   assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);

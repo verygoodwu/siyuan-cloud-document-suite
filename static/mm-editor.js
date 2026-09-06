@@ -3,6 +3,7 @@ import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__P
 import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   buildOutlineRows,
+  calculateMindEditorRect,
   captureMindExpansion,
   expandNodeAncestors,
   flattenMindNodes,
@@ -50,6 +51,7 @@ let mindRenderFrame;
 let mindRenderRequested = false;
 let mindRenderReveal = false;
 let passiveDecorationFrame;
+let mindInputAlignmentRequest = 0;
 let workspaceRenderFrame;
 let workspaceSelectionFrame;
 let workspaceRevealActive = false;
@@ -367,14 +369,36 @@ function resizeMindInputBox(input) {
 
 function alignMindInputBox(mind, topic, input) {
   if (!(input instanceof HTMLElement) || !topic || !mind?.nodes) return;
+  alignVisibleHierarchy();
   const hostRect = mind.nodes.getBoundingClientRect();
   const topicRect = topic.getBoundingClientRect();
-  const scaleX = hostRect.width && mind.nodes.offsetWidth ? hostRect.width / mind.nodes.offsetWidth : 1;
-  const scaleY = hostRect.height && mind.nodes.offsetHeight ? hostRect.height / mind.nodes.offsetHeight : 1;
-  input.style.left = `${(topicRect.left - hostRect.left) / scaleX}px`;
-  input.style.top = `${(topicRect.top - hostRect.top) / scaleY}px`;
+  const editorRect = calculateMindEditorRect(
+    hostRect,
+    topicRect,
+    mind.nodes.offsetWidth,
+    mind.nodes.offsetHeight
+  );
+  input.style.left = `${editorRect.left}px`;
+  input.style.top = `${editorRect.top}px`;
   input.style.right = "auto";
-  input.style.minWidth = `${Math.max(72, topicRect.width / scaleX - 8)}px`;
+  input.style.margin = "0";
+  input.style.minWidth = `${Math.max(72, editorRect.width)}px`;
+  input.dataset.cloudMinWidth = String(Math.max(72, editorRect.width));
+}
+
+function queueMindInputAlignment(mind, nodeId) {
+  if (!nodeId) return;
+  const request = ++mindInputAlignmentRequest;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (request !== mindInputAlignmentRequest) return;
+    const input = document.querySelector("#input-box");
+    const topic = findMindTopic(mind, nodeId);
+    if (!(input instanceof HTMLElement) || !topic) return;
+    input.dataset.cloudTopicId = nodeId;
+    alignMindInputBox(mind, topic, input);
+    resizeMindInputBox(input);
+    redrawVisibleBranches();
+  }));
 }
 
 function selectAndCenterMindNode(mind, nodeId) {
@@ -683,9 +707,9 @@ function redrawVisibleBranches() {
   // otherwise the path can be calculated against the hidden topic's stale
   // rectangle and appear to disappear.
   const input = document.querySelector("#input-box");
-  const editingId = input?.dataset.keyboardNodeId;
-  // Normal mouse editing does not set keyboardNodeId. MindElixir hides the
-  // edited topic by setting inline opacity to 0, so use that as a fallback.
+  const editingId = input?.dataset.cloudTopicId || input?.dataset.keyboardNodeId;
+  // Keep opacity detection as a fallback for an editor created before the
+  // beginEdit event has completed its two-frame alignment pass.
   const hiddenTopic = input && !editingId
     ? Array.from(document.querySelectorAll("me-tpc")).find((topic) => topic.style.opacity === "0")
     : undefined;
@@ -1321,6 +1345,7 @@ try {
   mind.bus.addListener("operation", (operation) => {
     if (operation?.name === "beginEdit") {
       if (operation?.obj?.id !== pendingKeyboardAdd?.nodeId) pendingKeyboardAdd = undefined;
+      queueMindInputAlignment(mind, operation?.obj?.id);
       return;
     }
     if (operation?.name === "toggleExpand" && searchExpansionSnapshot && operation?.obj?.id) {
@@ -1532,11 +1557,13 @@ try {
   document.addEventListener("input", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target.id !== "input-box") return;
-    if (target.dataset.keyboardNodeId) {
-      const topic = findMindTopic(mind, target.dataset.keyboardNodeId);
+    const editingNodeId = target.dataset.cloudTopicId || target.dataset.keyboardNodeId;
+    if (editingNodeId) {
+      const topic = findMindTopic(mind, editingNodeId);
       if (topic) alignMindInputBox(mind, topic, target);
     }
     resizeMindInputBox(target);
+    redrawVisibleBranches();
     if (target.dataset.keyboardNodeId) {
       target.dataset.keyboardDirty = String(
         (target.innerText?.trim() || "") !== (target.dataset.keyboardInitialTopic || "")

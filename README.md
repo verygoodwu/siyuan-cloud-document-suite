@@ -9,6 +9,11 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 
 ![Feature preview](preview.png)
 
+## v2.1.13 development progress
+
+- Fixes shifted mind-map editing overlays when double-clicking nodes at different depths or on opposite branches.
+- Uses the rendered topic rectangle for every edit entry point and keeps the topic, editor, and connector aligned as input size changes.
+
 ## What's new in v2.1.12
 
 - Adds real TXT/HTML and common source/configuration file editing while keeping original attachment formats.
@@ -21,6 +26,7 @@ This public release includes the work developed in v2.1.5–v2.1.12. See the [co
 
 ## Changelog (short version)
 
+- **v2.1.13 (local development)**: Uses rendered coordinates for double-click editing, keyboard-created nodes, and direct typing, fixing editor shifts caused by branch layout translations or zoom while keeping connectors synchronized as input size changes.
 - **v2.1.12**: Resolves the mind-map editor's versioned submodule URLs during packaging, preventing desktop and NAS browsers from reusing stale shared modules after an update. Includes all v2.1.11 features.
 - **v2.1.11**: Adds non-synchronized edit leases shared by browser sessions on one NAS/Linux/Docker kernel, byte-verifies uploaded assets, and marks plugin documents through initializing/ready creation phases. Verified browser backups can explicitly restore a missing 404 asset, while diagnostics no longer update the synchronized `drop-debug.json` file. This release also publishes the text editor, PDF workflow, type-aware exports, and unified editor experience developed in v2.1.5–v2.1.10.
 - **v2.1.10 (local development)**: Replaces the automatic Windows print dialog for document PDF export with a SiYuan-style PDF preview and Electron `printToPDF` flow. Desktop export now supports page size, margins, scale, landscape, embedded resources, title, subdocument, watermark, and pagination settings.

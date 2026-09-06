@@ -1,3 +1,12 @@
+# Cloud Document Suite v2.1.13 (local development)
+
+- Fixes shifted mind-map editing overlays on nodes at different depths and on translated branches.
+- Double-click editing, keyboard-created nodes, and direct typing now share one rendered-coordinate alignment path.
+- Editor growth and canvas zoom keep the input overlay and connector synchronized with the original topic.
+- 77 automated tests, production build, installed-file verification, and real SiYuan coordinate regression passed.
+
+---
+
 # Cloud Document Suite v2.1.12
 
 This release publishes all work developed in v2.1.5–v2.1.12 and keeps the plugin focused on a lightweight SiYuan-native editing experience.
