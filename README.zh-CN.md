@@ -2,6 +2,15 @@
 
 [English](./README.md) | **简体中文**
 
+## 使用指南 · 1 分钟上手
+
+1. **新建**：在思源左侧文档树中，右键文档或笔记本 → **创建文件**，选择表格、脑图、白板、文本或文档。没有看到入口时，可到右键菜单的“插件”子菜单中查找。
+2. **编辑**：表格选中单元格后直接输入，双击可修改已有内容；脑图双击节点改文字，按 **Tab** 添加子节点；白板单击选中图形、拖动移动、双击输入文字，按住 **空格** 拖动画布。普通文档使用思源编辑器编辑，可导出为 Word/PDF。
+3. **保存与同步**：修改会自动保存，关闭前请确认显示“已保存”。跨设备使用时，还需要完成思源自身的数据同步；**已保存不等于已同步到另一台设备**。遇到保存失败、只读或冲突提示，请先按提示处理，不要直接关闭。
+4. **导出**：在文档树中右键对应文档 → **导出文件**，选择可用格式；也可使用表格、脑图或白板编辑器中的导出按钮。
+
+小提示：插件侧重轻量编辑，建议导入简单表格；复杂 Excel 文件请保留原件。PDF 主要用于阅读，不支持直接修改 PDF 正文。
+
 [![最新版本](https://img.shields.io/github/v/release/verygoodwu/siyuan-cloud-document-suite?label=release)](https://github.com/verygoodwu/siyuan-cloud-document-suite/releases/latest)
 [![许可证](https://img.shields.io/github/license/verygoodwu/siyuan-cloud-document-suite)](./LICENSE)
 

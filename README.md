@@ -2,6 +2,15 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
+## Quick start · One minute
+
+1. **Create**: Right-click a document or notebook in SiYuan's document tree → **创建文件 (Create file)**, then choose a spreadsheet, mind map, whiteboard, text file, or document. If the entry is missing, check the context menu's Plugins submenu.
+2. **Edit**: Select a spreadsheet cell and type; double-click to edit existing content. Double-click a mind-map node to edit its text and press **Tab** to add a child. On a whiteboard, click a shape to select it, drag to move it, double-click to type, and hold **Space** while dragging to pan. Regular documents use SiYuan's editor and can be exported to Word/PDF.
+3. **Save and sync**: Changes save automatically. Wait for the saved status before closing. Cross-device access also requires SiYuan's own data sync to finish: **saved does not mean synced to another device**. Resolve any save-failure, read-only, or conflict notice before closing.
+4. **Export**: Right-click the corresponding document in the document tree → **导出文件 (Export file)** and choose an available format. You can also use the export button in the spreadsheet, mind-map, or whiteboard editor.
+
+Tip: This plugin focuses on lightweight editing. Import simple spreadsheets and keep the originals of complex Excel files. PDF support is primarily for reading, not editing PDF body content.
+
 [![Latest release](https://img.shields.io/github/v/release/verygoodwu/siyuan-cloud-document-suite?label=release)](https://github.com/verygoodwu/siyuan-cloud-document-suite/releases/latest)
 [![License](https://img.shields.io/github/license/verygoodwu/siyuan-cloud-document-suite)](./LICENSE)
 
