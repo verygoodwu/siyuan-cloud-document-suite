@@ -1,5 +1,5 @@
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
-import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease, editorDialog } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   MAX_RENDER_COLS,
   MAX_RENDER_ROWS,
@@ -104,9 +104,11 @@ import {
   let saveInFlight = false;
   let saveAgain = false;
   let lastSaveError = "";
+  let conflictPending = false;
   let sizeWarning = "";
   let capabilityWarning = "";
   let capabilityBlocked = false;
+  const canEdit = () => Boolean(model) && !capabilityBlocked && store.canEdit();
   let selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
   let selectionKind = "cells";
   let draggingSelection = false;
@@ -371,6 +373,8 @@ import {
   function updateHistoryButtons() {
     undoButton.disabled = undoStack.length === 0;
     redoButton.disabled = redoStack.length === 0;
+    undoButton.title = undoButton.disabled ? "没有可撤销的操作" : "撤销（Ctrl+Z）";
+    redoButton.title = redoButton.disabled ? "没有可重做的操作" : "重做（Ctrl+Y / Ctrl+Shift+Z）";
   }
 
   function snapshotsEqual(first, second) {
@@ -632,6 +636,7 @@ import {
   }
 
   function replaceSearchMatches(replaceAll) {
+    if (!canEdit()) return;
     finalizeEditSession();
     const query = findInput.value;
     if (!query) return;
@@ -808,10 +813,12 @@ import {
   }
 
   function applyHistory(entry, snapshot, layout, state, workbookState, selectionState) {
+    if (!canEdit()) return false;
+    if (workbookState && !workbookState.targetSheet) restoreWorkbookState(XLSX, model, workbookState);
     const sheetIndex = model.sheets.findIndex((sheet) => sheet.name === entry.sheet);
-    if (sheetIndex < 0) return false;
-    active = sheetIndex;
-    if (workbookState) restoreWorkbookState(XLSX, model, workbookState);
+    if (sheetIndex < 0 && !workbookState) return false;
+    active = Math.max(0, sheetIndex);
+    if (workbookState?.targetSheet) restoreWorkbookState(XLSX, model, workbookState);
     else if (state) restoreSheetState(XLSX, model, entry.sheet, state);
     else {
       if (snapshot) restoreCellRange(XLSX, model, entry.sheet, entry.row, entry.col, snapshot);
@@ -830,6 +837,7 @@ import {
   }
 
   function undo() {
+    if (!canEdit()) return;
     document.activeElement?.blur?.();
     finalizeEditSession();
     const entry = undoStack.pop();
@@ -839,6 +847,7 @@ import {
   }
 
   function redo() {
+    if (!canEdit()) return;
     document.activeElement?.blur?.();
     finalizeEditSession();
     const entry = redoStack.pop();
@@ -851,6 +860,7 @@ import {
     clearTimeout(saveTimer);
     try {
       store.cacheRecovery(makeRecoveryPayload(model));
+      if (conflictPending) { showSaveConflict(); return; }
       setStatus("正在写入思源…");
     } catch (error) {
       console.error(error);
@@ -933,7 +943,7 @@ import {
   }
 
   function startResize(axis, index, initialValue, event) {
-    if (!editMode || event.button !== 0) return;
+    if (!canEdit() || !editMode || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     finalizeEditSession();
@@ -959,13 +969,13 @@ import {
         guide.style.top = `${moveEvent.clientY}px`;
       }
     };
-    const end = () => {
+    const end = (event) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
       guide.remove();
       document.body.classList.remove("resizing-col", "resizing-row");
-      if (moved && Math.round(latest) !== Math.round(initialValue)) {
+      if (canEdit() && event.type !== "pointercancel" && moved && Math.round(latest) !== Math.round(initialValue)) {
         finishResize(axis, index, latest, beforeLayout);
       }
     };
@@ -1025,8 +1035,9 @@ import {
     const freeze = sheet.freeze || { rows: 0, cols: 0 };
     const columnWidths = Array.from({ length: cols }, (_, col) => columnPixelWidth(worksheet, col));
     const rowHeights = Array.from({ length: rows }, (_, row) => rowPixelHeight(worksheet, row));
-    const columnOffsets = columnWidths.map((_, col) => 46 + columnWidths.slice(0, col).reduce((sum, width) => sum + width, 0));
-    const rowOffsets = rowHeights.map((_, row) => 28 + rowHeights.slice(0, row).reduce((sum, height) => sum + height, 0));
+    let xOffset = 46, yOffset = 28;
+    const columnOffsets = columnWidths.map((width) => { const offset = xOffset; xOffset += width; return offset; });
+    const rowOffsets = rowHeights.map((height) => { const offset = yOffset; yOffset += height; return offset; });
     grid.style.width = `${46 + columnWidths.reduce((sum, width) => sum + width, 0)}px`;
     const colgroup = document.createElement("colgroup");
     const rowHeaderCol = document.createElement("col");
@@ -1135,7 +1146,7 @@ import {
       for (let col = 0; col < cols; col++) {
         if (mergeCovered.has(`${row}:${col}`)) continue;
         const td = document.createElement("td");
-        td.contentEditable = store.canEdit() ? "plaintext-only" : "false";
+        td.contentEditable = canEdit() ? "plaintext-only" : "false";
         td.tabIndex = 0;
         td.dataset.row = String(row);
         td.dataset.col = String(col);
@@ -1366,38 +1377,63 @@ import {
 
   function render() {
     app.classList.toggle("edit-mode", editMode);
-    modeToggle.textContent = editMode ? "返回简约" : "进入编辑";
+    modeToggle.textContent = editMode ? "收起工具栏" : "展开完整工具";
     modeToggle.disabled = modeTransition;
-    modeLabel.textContent = editMode ? "编辑" : "简约";
+    modeLabel.textContent = editMode ? "完整工具" : "基础工具";
     documentName.textContent = documentTitle;
     document.title = documentTitle;
     renderTabs();
     renderGrid();
     renderCharts();
     updateHistoryButtons();
-    setStatus(editMode ? "编辑模式 · 完整编辑工具已展开" : "简约模式 · 可直接编辑单元格并自动写入思源");
+    setStatus(editMode ? "完整工具 · 可直接编辑并自动保存" : "基础工具 · 可直接编辑单元格并自动写入思源");
   }
 
   function validSheetName(value) {
     return value && !/[\\/:?*\[\]\x00-\x1f]/.test(value);
   }
 
-  function renameSheet() {
+  async function renameSheet() {
+    if (!canEdit()) return;
+    finalizeEditSession();
     const sheet = model.sheets[active];
-    const next = prompt("Sheet 名称", sheet.name)?.trim().slice(0, 31);
-    if (!next || next === sheet.name) return;
-    if (!validSheetName(next)) {
-      alert("Sheet 名称不能包含 \\ / : ? * [ ] 等字符");
-      return;
-    }
+    const next = await editorDialog({
+      title: "重命名工作表", value: sheet.name, confirmLabel: "重命名",
+      message: "最多 31 个字符。",
+      validate: (name) => !validSheetName(name) ? "名称不能为空，也不能包含 \\ / : ? * [ ] 等字符"
+        : name.length > 31 ? "名称不能超过 31 个字符"
+          : model.sheets.some((item) => item !== sheet && item.name.toLowerCase() === name.toLowerCase()) ? "已有同名工作表" : "",
+      restoreFocus: () => cellLocator(selection.row, selection.col)?.focus({ preventScroll: true })
+    });
+    if (!next || next === sheet.name || !canEdit()) return;
     try {
+      const beforeWorkbookState = captureWorkbookState(model);
       renameWorksheet(model, sheet.name, next);
-      clearHistory();
+      pushHistory({ sheet: next, row: 0, col: 0, beforeWorkbookState, afterWorkbookState: captureWorkbookState(model) });
       scheduleSave();
       renderTabs();
     } catch (error) {
-      alert(error instanceof Error ? error.message : String(error));
+      notice.show(error instanceof Error ? error.message : String(error), { tone: "error" });
     }
+  }
+
+  function showSaveConflict() {
+    conflictPending = true;
+    setStatus("保存冲突：本机修改已保留，自动写入已暂停");
+    notice.show("远端已有新版本。请选择保留副本、读取远端或确认覆盖。", {
+      tone: "warning", duration: 0, actions: [
+        { label: "下载恢复副本", run: () => { downloadRecoveryWorkbook(); showSaveConflict(); } },
+        { label: "读取远端", run: async () => {
+          const accepted = await editorDialog({ title: "读取远端版本", message: "这会放弃当前页面的修改。建议先下载恢复副本。", confirmLabel: "读取远端", restoreFocus: focusCurrentSelection });
+          if (!accepted) { showSaveConflict(); return; }
+          clearTimeout(saveTimer); store.clearRecovery(); location.reload();
+        } },
+        { label: "覆盖远端", run: async () => {
+          const accepted = await editorDialog({ title: "覆盖远端版本", message: "将用当前工作簿替换远端内容。此操作可能覆盖其他页面的修改。", confirmLabel: "确认覆盖", restoreFocus: focusCurrentSelection });
+          if (accepted) void persist(true); else showSaveConflict();
+        } }
+      ]
+    });
   }
 
   async function exportWorkbook() {
@@ -1444,18 +1480,20 @@ import {
   }
 
   async function persist(force) {
+    if (!canEdit()) return;
+    if (conflictPending && !force) { showSaveConflict(); return; }
     if (saveInFlight) {
       saveAgain = true;
       return;
     }
     saveInFlight = true;
     lastSaveError = "";
-    let overwriteConflict = false;
     const operationCount = model.operations.length;
     try {
       setStatus(force ? "正在覆盖写入思源…" : "正在写入思源…");
       const bytes = withCanonicalReadView(() => serializeWorkbookModel(XLSX, model));
       const saved = await store.save(bytes, { force });
+      if (conflictPending) { conflictPending = false; notice.hide(); }
       model.operations.splice(0, operationCount);
       const savedAt = new Date().toLocaleTimeString();
       setStatus(saved.unchanged
@@ -1466,7 +1504,7 @@ import {
       if (error instanceof SaveConflictError) {
         lastSaveError = "思源附件已有新版本，本机修改已保留";
         setStatus(`保存冲突：${lastSaveError}`);
-        overwriteConflict = confirm("思源附件已在其他页面或设备发生变化。确定用当前页面内容覆盖远端版本吗？");
+        showSaveConflict();
       } else {
         lastSaveError = error instanceof Error ? error.message : String(error);
         setStatus(`保存失败（本机修改已保留）：${lastSaveError}`);
@@ -1481,10 +1519,7 @@ import {
       }
     } finally {
       saveInFlight = false;
-      if (overwriteConflict) {
-        saveAgain = false;
-        void persist(true);
-      } else if (saveAgain) {
+      if (saveAgain) {
         saveAgain = false;
         void persist(false);
       }
@@ -1493,7 +1528,7 @@ import {
 
   async function setEditMode(next) {
     if (!model || modeTransition || next === editMode) return;
-    if (next && capabilityBlocked) {
+    if (next && !canEdit()) {
       const message = "当前工作簿超出轻量编辑范围，已保持只读预览；请先导出或缩小文件后再编辑";
       setStatus(message);
       showOperationFeedback(message, "warning", 4800);
@@ -1571,6 +1606,7 @@ import {
   }
 
   function mutateSelectedRange(mutator, { withLayout = false, renderAll = false } = {}) {
+    if (!canEdit()) return;
     finalizeEditSession();
     const range = selectedRangeSnapshot();
     const beforeLayout = withLayout ? captureSheetLayout(model, range.sheet) : undefined;
@@ -1583,6 +1619,7 @@ import {
   }
 
   function mutateSheetLayout(mutator, { renderAll = false } = {}) {
+    if (!canEdit()) return;
     finalizeEditSession();
     const sheet = currentSheet();
     const beforeLayout = captureSheetLayout(model, sheet.name);
@@ -1599,6 +1636,7 @@ import {
   }
 
   function commitFormulaBar() {
+    if (!canEdit()) return;
     updateFormulaHelp("");
     if (!formulaSession || !model) return;
     const session = formulaSession;
@@ -1700,6 +1738,7 @@ import {
   }
 
   function createChart() {
+    if (!canEdit()) return;
     const bounds = selectionBounds();
     const sheet = currentSheet();
     const used = XLSX.utils.decode_range(model.workbook.Sheets[sheet.name]["!ref"] || "A1:A1");
@@ -1724,6 +1763,7 @@ import {
   }
 
   function clearSelectedCells() {
+    if (!canEdit()) return;
     finalizeEditSession();
     const range = selectedRangeSnapshot();
     const values = Array.from({ length: range.rows }, () => Array(range.cols).fill(""));
@@ -1737,6 +1777,7 @@ import {
   }
 
   async function pasteTable(text) {
+    if (!canEdit()) return;
     finalizeEditSession();
     let values = parseClipboardTable(text);
     const startRow = selection.row;
@@ -1751,6 +1792,7 @@ import {
     const truncatedCols = Math.max(0, originalCols - Math.max(0, ...values.map((row) => row.length)));
     showOperationFeedback(`正在粘贴 ${values.length} 行 × ${Math.max(0, ...values.map((row) => row.length))} 列…`, "working", 0);
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (!canEdit()) return;
     const sheet = currentSheet();
     const rowCount = values.length;
     const colCount = values[0].length;
@@ -1838,6 +1880,12 @@ import {
   }
 
   function handleGridKeydown(event) {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (!canEdit() && (["Delete", "Backspace", "F2", "Enter"].includes(event.key)
+      || ((event.ctrlKey || event.metaKey) && ["v", "x", "z", "y"].includes(event.key.toLowerCase())))) {
+      event.preventDefault();
+      return;
+    }
     const modifier = event.ctrlKey || event.metaKey;
     const targetCell = event.target instanceof HTMLElement ? event.target.closest("td") : null;
     if (modifier && event.key.toLowerCase() === "z") {
@@ -1922,6 +1970,7 @@ import {
   }
 
   async function mutateStructure(axis, mode) {
+    if (!canEdit()) return;
     if (structureBusy) return;
     finalizeEditSession();
     const sheet = model.sheets[active];
@@ -2132,13 +2181,16 @@ import {
   redoButton.addEventListener("click", redo);
   document.querySelector("#rename").addEventListener("click", renameSheet);
   document.querySelector("#delete").addEventListener("click", () => {
+    if (!canEdit()) return;
+    finalizeEditSession();
     if (!confirm(`删除 ${model.sheets[active].name}？`)) return;
     try {
+      const beforeWorkbookState = captureWorkbookState(model);
       deleteWorksheet(model, model.sheets[active].name);
       active = Math.max(0, active - 1);
       selectionKind = "cells";
       selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
-      clearHistory();
+      pushHistory({ sheet: model.sheets[active].name, row: 0, col: 0, beforeWorkbookState, afterWorkbookState: captureWorkbookState(model) });
       scheduleSave();
       render();
     } catch (error) {
@@ -2166,13 +2218,15 @@ import {
     if (request.asset === asset && request.format === "xlsx") void exportWorkbook();
   });
   addSheetButton.addEventListener("click", () => {
-    if (!editMode) return;
+    if (!editMode || !canEdit()) return;
+    finalizeEditSession();
+    const beforeWorkbookState = captureWorkbookState(model);
     const name = uniqueName("Sheet");
     addWorksheet(XLSX, model, name);
     active = model.sheets.length - 1;
     selectionKind = "cells";
     selection = { anchorRow: 0, anchorCol: 0, row: 0, col: 0 };
-    clearHistory();
+    pushHistory({ sheet: name, row: 0, col: 0, beforeWorkbookState, afterWorkbookState: captureWorkbookState(model) });
     scheduleSave();
     render();
   });
@@ -2321,8 +2375,9 @@ import {
     if (!formulaSuggestionMenu.hidden) positionFormulaSuggestions();
   });
   document.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229 || document.querySelector("dialog[open]")) return;
     const modifier = event.ctrlKey || event.metaKey;
-    if (modifier && event.key.toLowerCase() === "s" && model && editMode) {
+    if (modifier && event.key.toLowerCase() === "s" && canEdit()) {
       event.preventDefault();
       finalizeEditSession();
       clearTimeout(saveTimer);
@@ -2353,7 +2408,7 @@ import {
     }
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && editMode && model?.operations?.length && !saveInFlight) {
+    if (document.visibilityState === "hidden" && canEdit() && model?.operations?.length && !saveInFlight) {
       finalizeEditSession();
       clearTimeout(saveTimer);
       void persist(false);
@@ -2389,24 +2444,21 @@ import {
         ? "超出轻量编辑范围，当前为只读预览"
         : "该附件正在另一个页面中编辑";
     }
-    if (!store.canEdit()) {
-      formulaInput.disabled = true;
-      grid.querySelectorAll("[contenteditable]").forEach((cell) => { cell.contentEditable = "false"; });
-      const stopEdit = (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      };
-      grid.addEventListener("beforeinput", stopEdit, true);
-      grid.addEventListener("paste", stopEdit, true);
-      grid.addEventListener("cut", stopEdit, true);
-      grid.addEventListener("keydown", (event) => {
-        const modifier = event.ctrlKey || event.metaKey;
-        const mutating = event.key.length === 1
-          || ["Backspace", "Delete", "Enter", "F2"].includes(event.key)
-          || (modifier && ["v", "x", "z", "y"].includes(event.key.toLowerCase()));
-        if (mutating) stopEdit(event);
-      }, true);
-    }
+    const updateAccess = () => {
+      const allowed = canEdit();
+      formulaInput.disabled = !allowed;
+      modeToggle.disabled = !allowed;
+      grid.querySelectorAll("[contenteditable]").forEach((cell) => { cell.contentEditable = allowed ? "plaintext-only" : "false"; });
+      app.querySelectorAll(".edit-only").forEach((element) => { element.inert = !allowed; });
+      replaceOneButton.disabled = replaceAllButton.disabled = !allowed;
+      addSheetButton.disabled = !allowed;
+    };
+    updateAccess();
+    watchEditLease(store, notice, setStatus, updateAccess);
+    const guardInput = (event) => {
+      if (!canEdit()) { event.preventDefault(); event.stopImmediatePropagation(); }
+    };
+    for (const name of ["beforeinput", "paste", "cut"]) grid.addEventListener(name, guardInput, true);
     requestAnimationFrame(() => {
       const wrapper = document.querySelector(".grid-wrap");
       wrapper.scrollTop = Math.max(0, Number(view.scrollTop) || 0);
@@ -2415,17 +2467,14 @@ import {
     if (!store.canEdit()) {
       showLeaseState(store, notice, setStatus);
     } else if (state === "conflict") {
-      setStatus("检测到跨设备保存冲突：当前显示合并后的本机修改，尚未覆盖思源");
-      if (confirm("检测到本机恢复内容与思源附件冲突。确定用当前表格覆盖思源中的版本吗？")) {
-        void persist(true);
-      }
+      showSaveConflict();
     } else if (state === "legacy-kept") {
       setStatus("已读取思源附件；旧版本机缓存仍保留");
     } else if (state === "legacy-recovery" || state === "recovery") {
       setStatus("检测到未写入的本机修改，正在恢复到思源…");
       scheduleSave();
     } else {
-      setStatus("简约模式 · 可直接编辑单元格并自动写入思源");
+      setStatus("基础工具 · 可直接编辑单元格并自动写入思源");
     }
   }).catch((error) => {
     console.error(error);

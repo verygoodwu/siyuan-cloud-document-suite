@@ -1,3 +1,27 @@
+// One line index per content value; cursor movement uses binary search, not a full scan.
+export function createTextMetrics() {
+  let source;
+  let starts = [0];
+  let builds = 0;
+  return {
+    read(value, offset = 0) {
+      if (source !== value) {
+        source = value;
+        starts = [0];
+        for (let at = value.indexOf("\n"); at !== -1; at = value.indexOf("\n", at + 1)) starts.push(at + 1);
+        builds += 1;
+      }
+      offset = Math.max(0, Math.min(value.length, offset));
+      let low = 0, high = starts.length;
+      while (low + 1 < high) {
+        const middle = (low + high) >>> 1;
+        if (starts[middle] <= offset) low = middle; else high = middle;
+      }
+      return { lines: starts.length, line: low + 1, column: offset - starts[low] + 1, builds };
+    }
+  };
+}
+
 export function lineBlockRange(value, selectionStart, selectionEnd) {
   const start = Math.max(0, Math.min(value.length, selectionStart));
   const end = Math.max(start, Math.min(value.length, selectionEnd));

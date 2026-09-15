@@ -1,5 +1,5 @@
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
-import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, trimSnapshotHistory, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   anchorForDirection,
   cloneWhiteboardDocument,
@@ -96,6 +96,8 @@ let temporaryHand = false;
 let interaction = null;
 let saveTimer;
 let viewportSaveTimer;
+let lastQueuedViewport = "";
+let historyBudgetNotified = false;
 let saving = false;
 let saveAgain = false;
 let revision = 0;
@@ -106,7 +108,69 @@ let clipboardNodes = [];
 let editingNodeId = null;
 let searchMatches = [];
 let searchIndex = -1;
+let contextMenu = null;
 const DRAG_THRESHOLD_PX = 5;
+
+function closeContextMenu(restoreFocus = true) {
+  if (!contextMenu) return;
+  contextMenu.remove(); contextMenu = null;
+  if (restoreFocus) shell.focus({ preventScroll: true });
+}
+
+function openContextMenu(x, y, id = null) {
+  closeContextMenu(false);
+  if (id && !selectedIds.has(id)) selectedIds = resolveWhiteboardSelection(whiteboard, [id]);
+  else if (!id) selectedIds.clear();
+  renderSelectionOnly();
+  const menu = document.createElement("div");
+  contextMenu = menu;
+  menu.id = "board-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", id ? "所选对象操作" : "画布操作");
+  Object.assign(menu.style, { position: "fixed", zIndex: "10001", minWidth: "170px", padding: "6px", border: "1px solid var(--board-border)", borderRadius: "8px", background: "var(--board-panel)", color: "var(--board-text)", boxShadow: "var(--board-shadow)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" });
+  const actions = id ? [
+    ["复制", copySelection, false], ["创建副本", duplicateSelection, true],
+    ["组合", groupSelection, true, selectedIds.size > 1],
+    ["取消组合", ungroupSelection, true, selectedNodes().some((node) => node.groupId)],
+    ["置于顶层", () => applyLayer("front"), true],
+    ["置于底层", () => applyLayer("back"), true],
+    ["适应所选内容", fitSelection, false], ["删除", deleteSelection, true]
+  ] : [
+    ["粘贴", pasteSelection, true, clipboardNodes.length > 0],
+    ["新建矩形", () => { const node = createNodeAt("rect", screenToWorld(x, y)); setTool("select"); beginTextEditing(node); }, true],
+    ["全选", () => { selectedIds = new Set(whiteboard.nodes.map((node) => node.id)); renderSelectionOnly(); }, false, whiteboard.nodes.length > 0],
+    ["适应全部内容", fitContent, false]
+  ];
+  for (const [label, run, mutating, available = true] of actions) {
+    const button = document.createElement("button");
+    button.type = "button"; button.textContent = label; button.setAttribute("role", "menuitem");
+    button.disabled = !available || (mutating && !store.canEdit());
+    Object.assign(button.style, { display: "block", width: "100%", textAlign: "left", padding: "7px 12px", border: "0", borderRadius: "4px", background: "transparent", color: "inherit", opacity: button.disabled ? ".45" : "1" });
+    button.addEventListener("focus", () => { button.style.background = "var(--board-panel-hover)"; });
+    button.addEventListener("blur", () => { button.style.background = "transparent"; });
+    button.addEventListener("pointerenter", () => { if (!button.disabled) button.focus({ preventScroll: true }); });
+    button.addEventListener("click", () => {
+      closeContextMenu();
+      if (!mutating || store.canEdit()) run();
+    });
+    menu.append(button);
+  }
+  menu.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); closeContextMenu(); return; }
+    const items = [...menu.querySelectorAll("button:not(:disabled)")];
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) && items.length) {
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next].focus();
+    }
+  });
+  document.body.append(menu);
+  menu.style.left = `${Math.max(8, Math.min(x, innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, innerHeight - menu.offsetHeight - 8))}px`;
+  menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+}
 
 function setStatus(message, state = "idle") {
   status.textContent = message;
@@ -223,8 +287,10 @@ function render() {
   zoomValue.textContent = `${Math.round(currentViewport().zoom * 100)}%`;
   syncSelectionToolbar();
   positionSelectionToolbar(bounds);
-  undoButton.disabled = historyIndex <= 0;
-  redoButton.disabled = historyIndex >= history.length - 1;
+  undoButton.disabled = !store.canEdit() || historyIndex <= 0;
+  redoButton.disabled = !store.canEdit() || historyIndex >= history.length - 1;
+  undoButton.title = !store.canEdit() ? "只读模式，不能撤销" : historyIndex <= 0 ? "没有可撤销的操作" : "撤销（Ctrl+Z）";
+  redoButton.title = !store.canEdit() ? "只读模式，不能重做" : historyIndex >= history.length - 1 ? "没有可重做的操作" : "重做（Ctrl+Y / Ctrl+Shift+Z）";
 }
 
 function renderSelectionOnly() {
@@ -250,7 +316,7 @@ function renderInteractionNodes(nodeIds) {
 }
 
 function positionSelectionToolbar(bounds) {
-  if (!bounds || selectedIds.size === 0 || editingNodeId) {
+  if (!bounds || selectedIds.size === 0 || editingNodeId || !store.canEdit()) {
     selectionToolbar.hidden = true;
     return;
   }
@@ -282,7 +348,13 @@ function syncSelectionToolbar() {
   document.querySelector("#group").hidden = shapeCount < 2;
   document.querySelector("#ungroup").hidden = !nodes.some((node) => node.groupId);
   document.querySelector("#create-frame").hidden = shapeCount < 1;
-  if (nodes.length !== 1) return;
+  if (!nodes.length) return;
+  if (!fontSize.querySelector('option[value=""]')) fontSize.prepend(new Option("—", ""));
+  for (const [key, input, swatch] of [["fill", fillColor, fillSwatch], ["stroke", strokeColor, strokeSwatch], ["textColor", textColor, textSwatch]]) {
+    const mixed = new Set(nodes.map((node) => node.style[key])).size > 1;
+    swatch.style.background = mixed ? "repeating-linear-gradient(135deg,#aaa 0 4px,#fff 4px 8px)" : "";
+    input.title = mixed ? "多个值，选择颜色后统一应用" : "";
+  }
   const node = nodes[0];
   fillColor.value = safeHex(node.style.fill, "#ffffff");
   strokeColor.value = safeHex(node.style.stroke, "#4e83fd");
@@ -292,7 +364,11 @@ function syncSelectionToolbar() {
   textSwatch.style.setProperty("--swatch", node.style.textColor);
   fontSize.value = String([12, 14, 16, 18, 24, 32, 48].reduce((best, size) => Math.abs(size - node.style.fontSize) < Math.abs(best - node.style.fontSize) ? size : best, 16));
   boldButton.classList.toggle("active", node.style.fontWeight === "bold");
-  lineShape.hidden = node.type !== "connector";
+  const mixedBold = new Set(nodes.map((node) => node.style.fontWeight)).size > 1;
+  boldButton.setAttribute("aria-pressed", mixedBold ? "mixed" : String(node.style.fontWeight === "bold"));
+  boldButton.classList.toggle("active", !mixedBold && node.style.fontWeight === "bold");
+  if (new Set(nodes.map((node) => node.style.fontSize)).size > 1) fontSize.value = "";
+  lineShape.hidden = nodes.some((item) => item.type !== "connector");
   if (node.type === "connector") lineShape.value = node.lineShape;
 }
 
@@ -311,7 +387,11 @@ function pushHistory() {
   if (history[historyIndex] === snapshot) return;
   history.splice(historyIndex + 1);
   history.push(snapshot);
-  if (history.length > 100) history.shift();
+  const trimmed = trimSnapshotHistory(history);
+  if (trimmed.removed && !historyBudgetNotified) {
+    historyBudgetNotified = true;
+    notice.show("为控制内存，已清理最早的撤销记录；当前内容不受影响。");
+  }
   historyIndex = history.length - 1;
 }
 
@@ -324,8 +404,19 @@ function cacheAndScheduleSave(message = "正在保存…") {
 }
 
 function scheduleViewportSave() {
+  if (!store.canEdit()) return;
+  const viewport = JSON.stringify(whiteboard.viewport);
+  if (viewport === lastQueuedViewport) return;
+  lastQueuedViewport = viewport;
+  // Mark dirty immediately so hiding the page still flushes the latest viewport.
+  revision += 1;
+  setStatus("等待保存视图…", "saving");
   window.clearTimeout(viewportSaveTimer);
-  viewportSaveTimer = window.setTimeout(() => cacheAndScheduleSave("正在保存视图…"), 180);
+  viewportSaveTimer = window.setTimeout(() => {
+    if (revision <= savedRevision) return;
+    store.cacheRecovery(whiteboard);
+    void persist(false);
+  }, 1200);
 }
 
 function commitChange({ history: withHistory = true } = {}) {
@@ -336,6 +427,11 @@ function commitChange({ history: withHistory = true } = {}) {
 }
 
 async function persist(force, notify = false) {
+  if (!store.canEdit() || !whiteboard) return;
+  if (!force && revision <= savedRevision) {
+    if (notify) notice.show("没有待保存的修改");
+    return;
+  }
   window.clearTimeout(saveTimer);
   if (saving) {
     saveAgain = true;
@@ -343,9 +439,11 @@ async function persist(force, notify = false) {
   }
   saving = true;
   const targetRevision = revision;
+  let succeeded = false;
   try {
     setStatus("正在保存…", "saving");
     await store.save(serializeWhiteboardDocument(whiteboard), { force });
+    succeeded = true;
     savedRevision = targetRevision;
     conflictNotice.hidden = true;
     if (revision === savedRevision) setStatus("已保存到思源", "saved");
@@ -368,7 +466,7 @@ async function persist(force, notify = false) {
     }
   } finally {
     saving = false;
-    if (saveAgain || revision > savedRevision) {
+    if (succeeded && (saveAgain || revision > savedRevision)) {
       saveAgain = false;
       saveTimer = window.setTimeout(() => void persist(false), 900);
     }
@@ -376,6 +474,7 @@ async function persist(force, notify = false) {
 }
 
 function restoreHistory(nextIndex) {
+  if (!store.canEdit()) return;
   if (nextIndex < 0 || nextIndex >= history.length || nextIndex === historyIndex) return;
   const previous = whiteboard;
   historyIndex = nextIndex;
@@ -527,6 +626,7 @@ function textEditingBounds(node) {
 }
 
 function beginTextEditing(node, options = {}) {
+  if (!store.canEdit()) return;
   if (!node || node.type === "freehand" || node.type === "image") return;
   if (editingNodeId && editingNodeId !== node.id) finishTextEditing();
   editingNodeId = node.id;
@@ -555,7 +655,7 @@ function beginTextEditing(node, options = {}) {
   };
   focusAndPlaceCaret();
   requestAnimationFrame(() => {
-    if (document.activeElement !== textEditorInput) focusAndPlaceCaret();
+    if (editingNodeId === node.id && !textEditor.hidden && document.activeElement !== textEditorInput) focusAndPlaceCaret();
   });
 }
 
@@ -564,10 +664,11 @@ function finishTextEditing(cancel = false) {
   const node = nodeById(editingNodeId);
   const initial = textEditor.dataset.initialValue || "";
   if (node && !cancel) node.text = (textEditorInput.innerText || textEditorInput.textContent || "").replace(/\r/g, "").slice(0, 20000);
-  textEditor.hidden = true;
   editingNodeId = null;
+  textEditor.hidden = true;
   if (node && !cancel && node.text !== initial) commitChange();
   else render();
+  if (document.activeElement === textEditorInput) shell.focus({ preventScroll: true });
 }
 
 function beginMove(event, id, point) {
@@ -602,6 +703,8 @@ function beginMove(event, id, point) {
     dragging: false,
     changed: false
   };
+  interaction.initialIds = new Set(whiteboard.nodes.map((node) => node.id));
+  interaction.initialSelection = new Set(selectedIds);
   shell.setPointerCapture(event.pointerId);
   renderSelectionOnly();
 }
@@ -629,6 +732,7 @@ function beginPan(event) {
     clientX: event.clientX,
     clientY: event.clientY,
     original: { ...currentViewport() },
+    context: event.button === 2 ? { x: event.clientX, y: event.clientY, id: nodeIdFromTarget(event.target) } : null,
     changed: false
   };
   shell.classList.add("dragging");
@@ -762,14 +866,17 @@ function beginConnector(event, id, point) {
     pointerId: event.pointerId,
     sourceId: id,
     sourceAnchor: nodeAnchorFromPoint(source, point),
+    start: point,
     current: point
   };
   shell.setPointerCapture(event.pointerId);
 }
 
 function onPointerDown(event) {
+  if (!whiteboard || document.querySelector("dialog[open]")) return;
   if (![0, 1, 2].includes(event.button)) return;
-  if (event.button === 2) event.preventDefault();
+  // Keep the browser's default focus action from stealing focus from a newly opened text editor.
+  event.preventDefault();
   if (editingNodeId) finishTextEditing();
   const point = screenToWorld(event.clientX, event.clientY);
   const resizeHandle = event.target instanceof Element ? event.target.closest("[data-resize-handle]")?.getAttribute("data-resize-handle") : null;
@@ -778,6 +885,16 @@ function onPointerDown(event) {
   const id = nodeIdFromTarget(event.target);
   if (event.button === 1 || event.button === 2 || tool === "hand" || temporaryHand) {
     beginPan(event);
+    return;
+  }
+  if (!store.canEdit()) {
+    if (id) {
+      selectedIds = event.shiftKey ? new Set([...selectedIds, id]) : new Set([id]);
+      renderSelectionOnly();
+    } else {
+      interaction = { type: "marquee", pointerId: event.pointerId, start: point, current: point, additive: event.shiftKey };
+      shell.setPointerCapture(event.pointerId);
+    }
     return;
   }
   if (tool === "select" && id && event.detail >= 2) {
@@ -823,12 +940,43 @@ function onPointerDown(event) {
   }
 }
 
+function cancelInteraction() {
+  const canceled = interaction;
+  interaction = null;
+  temporaryHand = false;
+  shell.classList.remove("dragging");
+  if (tool !== "hand") shell.classList.remove("tool-hand");
+  if (!canceled) return;
+  if (shell.hasPointerCapture(canceled.pointerId)) shell.releasePointerCapture(canceled.pointerId);
+  if (canceled.type === "move") {
+    if (canceled.duplicated) {
+      whiteboard.nodes = whiteboard.nodes.filter((node) => canceled.initialIds.has(node.id));
+      selectedIds = canceled.initialSelection;
+    } else {
+      for (const [id, original] of canceled.originals) {
+        const index = whiteboard.nodes.findIndex((node) => node.id === id);
+        if (index >= 0) whiteboard.nodes[index] = original;
+      }
+    }
+  } else if (canceled.type === "resize" || canceled.type === "reconnect") {
+    const original = canceled.originalNode || canceled.original;
+    const index = whiteboard.nodes.findIndex((node) => node.id === original.id);
+    if (index >= 0) whiteboard.nodes[index] = original;
+  } else if (canceled.type === "pan") {
+    whiteboard.viewport = canceled.original;
+  }
+  draftLayer.replaceChildren();
+  setConnectionTarget(null);
+  render();
+}
+
 function onPointerMove(event) {
   if (!interaction || interaction.pointerId !== event.pointerId) return;
   const point = screenToWorld(event.clientX, event.clientY);
   if (interaction.type === "pan") {
     const dx = event.clientX - interaction.clientX;
     const dy = event.clientY - interaction.clientY;
+    if (interaction.context && !interaction.changed && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
     whiteboard.viewport.x = interaction.original.x + dx;
     whiteboard.viewport.y = interaction.original.y + dy;
     interaction.changed ||= Math.abs(dx) + Math.abs(dy) > 1;
@@ -943,6 +1091,7 @@ function onPointerUp(event) {
   setConnectionTarget(null);
   if (finished.type === "pan") {
     if (finished.changed) scheduleViewportSave();
+    else if (finished.context) openContextMenu(finished.context.x, finished.context.y, finished.context.id);
     return;
   }
   if (finished.type === "move" || finished.type === "resize") {
@@ -961,11 +1110,13 @@ function onPointerUp(event) {
   }
   if (finished.type === "connector") {
     const target = nodeById(finished.targetId);
-    if (target && target.id !== finished.sourceId && target.type !== "connector" && target.type !== "freehand") {
-      const point = screenToWorld(event.clientX, event.clientY);
+    const point = screenToWorld(event.clientX, event.clientY);
+    const moved = Math.hypot(point.x - finished.start.x, point.y - finished.start.y) * currentViewport().zoom >= DRAG_THRESHOLD_PX;
+    const validTarget = target && target.id !== finished.sourceId && target.type !== "connector" && target.type !== "freehand";
+    if (store.canEdit() && moved && (validTarget || !target)) {
       const connector = createWhiteboardNode("connector", {
         from: { nodeId: finished.sourceId, anchor: finished.sourceAnchor },
-        to: { nodeId: target.id, anchor: nodeAnchorFromPoint(target, point) }
+        to: validTarget ? { nodeId: target.id, anchor: nodeAnchorFromPoint(target, point) } : point
       });
       whiteboard.nodes.push(connector);
       selectedIds = new Set([connector.id]);
@@ -1177,6 +1328,22 @@ function insertTemplate(id) {
 }
 
 function onKeyDown(event) {
+  if (!whiteboard || event.isComposing || event.keyCode === 229 || document.querySelector("dialog[open]")) return;
+  if (contextMenu) return;
+  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+    if (event.target?.closest?.("input,textarea,[contenteditable=true]")) return;
+    event.preventDefault();
+    const rect = shell.getBoundingClientRect();
+    const node = selectedNodes()[0];
+    const position = node ? worldToScreen(nodeBounds(node).x, nodeBounds(node).y) : { x: rect.width / 2, y: rect.height / 2 };
+    openContextMenu(rect.left + position.x, rect.top + position.y, node?.id);
+    return;
+  }
+  if (event.key === "Escape" && interaction) {
+    event.preventDefault();
+    cancelInteraction();
+    return;
+  }
   const modifier = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
   if (modifier && key === "f") {
@@ -1192,6 +1359,12 @@ function onKeyDown(event) {
   const editingText = event.target === textEditorInput
     || (event.target instanceof Node && textEditor.contains(event.target));
   if (editingText || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+    if (editingText && modifier && key === "s") {
+      event.preventDefault();
+      finishTextEditing();
+      void persist(false, true);
+      return;
+    }
     if (editingText && event.key === "Escape") {
       event.preventDefault();
       finishTextEditing(true);
@@ -1204,6 +1377,15 @@ function onKeyDown(event) {
   if (event.code === "Space" && !temporaryHand) {
     temporaryHand = true;
     shell.classList.add("tool-hand");
+    event.preventDefault();
+    return;
+  }
+  if (!store.canEdit()) {
+    if (modifier && key === "c") copySelection();
+    else if (key === "1") fitContent();
+    else if (key === "2") fitSelection();
+    else if (key === "escape") { selectedIds.clear(); render(); }
+    else return;
     event.preventDefault();
     return;
   }
@@ -1236,10 +1418,10 @@ function onKeyDown(event) {
   } else if ((key === "enter" || key === "f2") && selectedIds.size === 1) {
     event.preventDefault();
     beginTextEditing(selectedNodes()[0]);
-  } else if (!modifier && !event.altKey && key === "1") {
+  } else if (!event.altKey && key === "1" && (modifier || !selectedIds.size)) {
     event.preventDefault();
     fitContent();
-  } else if (!modifier && !event.altKey && key === "2") {
+  } else if (!event.altKey && key === "2" && (modifier || !selectedIds.size)) {
     event.preventDefault();
     fitSelection();
   } else if (!modifier && !event.altKey && key.length === 1 && selectedIds.size === 1) {
@@ -1283,6 +1465,16 @@ function onKeyUp(event) {
 }
 
 function bindControls() {
+  shell.tabIndex = -1;
+  document.addEventListener("pointerdown", (event) => { if (contextMenu && !contextMenu.contains(event.target)) closeContextMenu(false); }, true);
+  window.addEventListener("resize", () => closeContextMenu(false));
+  window.addEventListener("blur", () => closeContextMenu(false));
+  for (const dialog of document.querySelectorAll("dialog")) {
+    dialog.addEventListener("close", () => shell.focus({ preventScroll: true }));
+  }
+  selectionToolbar.addEventListener("click", (event) => {
+    if (event.target.closest("button") && !event.target.closest(".color-button")) shell.focus({ preventScroll: true });
+  });
   document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
   document.querySelector("#shape-menu-button").addEventListener("click", () => { shapeMenu.hidden = !shapeMenu.hidden; });
   document.querySelector("#image-button").addEventListener("click", () => document.querySelector("#image-input").click());
@@ -1329,11 +1521,14 @@ function bindControls() {
   strokeColor.addEventListener("change", finishStyleChange);
   textColor.addEventListener("input", () => applyStyle("textColor", textColor.value));
   textColor.addEventListener("change", finishStyleChange);
-  fontSize.addEventListener("change", () => { applyStyle("fontSize", Number(fontSize.value)); finishStyleChange(); });
-  boldButton.addEventListener("click", () => { applyStyle("fontWeight", selectedNodes()[0]?.style.fontWeight === "bold" ? "normal" : "bold"); finishStyleChange(); });
+  fontSize.addEventListener("change", () => { if (!fontSize.value) return; applyStyle("fontSize", Number(fontSize.value)); finishStyleChange(); shell.focus({ preventScroll: true }); });
+  boldButton.addEventListener("click", () => { applyStyle("fontWeight", selectedNodes().every((node) => node.style.fontWeight === "bold") ? "normal" : "bold"); finishStyleChange(); });
   lineShape.addEventListener("change", () => {
-    const node = selectedNodes()[0];
-    if (node?.type === "connector") { node.lineShape = lineShape.value; commitChange(); }
+    const nodes = selectedNodes();
+    if (nodes.length && nodes.every((node) => node.type === "connector")) {
+      for (const node of nodes) node.lineShape = lineShape.value;
+      commitChange();
+    }
   });
   document.querySelector("#zoom-in").addEventListener("click", () => zoomAtCenter(1.2));
   document.querySelector("#zoom-out").addEventListener("click", () => zoomAtCenter(1 / 1.2));
@@ -1374,10 +1569,12 @@ function bindControls() {
   shell.addEventListener("pointerdown", onPointerDown);
   shell.addEventListener("pointermove", onPointerMove);
   shell.addEventListener("pointerup", onPointerUp);
-  shell.addEventListener("pointercancel", onPointerUp);
+  shell.addEventListener("pointercancel", cancelInteraction);
+  window.addEventListener("blur", cancelInteraction);
   shell.addEventListener("wheel", onWheel, { passive: false });
   shell.addEventListener("contextmenu", (event) => event.preventDefault());
   shell.addEventListener("dblclick", (event) => {
+    if (!store.canEdit()) return;
     const id = nodeIdFromTarget(event.target);
     if (id && editingNodeId !== id) beginTextEditing(nodeById(id));
   });
@@ -1399,6 +1596,8 @@ async function reloadRemote() {
     conflictNotice.hidden = true;
     revision = 0;
     savedRevision = 0;
+    lastQueuedViewport = "";
+    window.clearTimeout(viewportSaveTimer);
     resetHistory();
     setStatus("已加载远端版本", "saved");
   } catch (error) {
@@ -1431,22 +1630,23 @@ async function start() {
     document.querySelector("#board-file-name").title = assetFileName;
     document.title = `${assetFileName} · 白板`;
     resetHistory();
+    const updateAccess = (allowed) => {
+      if (!allowed) {
+        cancelInteraction();
+        if (editingNodeId) finishTextEditing();
+      }
+      document.querySelector("#main-toolbar").inert = !allowed;
+      selectionToolbar.inert = !allowed;
+      textEditorInput.contentEditable = String(allowed);
+      undoButton.disabled = !allowed || historyIndex <= 0;
+      redoButton.disabled = !allowed || historyIndex >= history.length - 1;
+    };
+    updateAccess(store.canEdit());
+    watchEditLease(store, notice, setStatus, updateAccess);
     if (!store.canEdit()) {
       document.querySelector("#main-toolbar")?.setAttribute("inert", "");
       selectionToolbar?.setAttribute("inert", "");
       textEditorInput.contentEditable = "false";
-      const stopEdit = (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      };
-      shell.addEventListener("pointerdown", stopEdit, true);
-      shell.addEventListener("dblclick", stopEdit, true);
-      window.addEventListener("keydown", (event) => {
-        const modifier = event.ctrlKey || event.metaKey;
-        const allowed = (modifier && event.key.toLowerCase() === "f")
-          || ["1", "2", "Escape"].includes(event.key);
-        if (!allowed && !event.target?.closest?.("#board-search")) stopEdit(event);
-      }, true);
       showLeaseState(store, notice, setStatus);
     } else if (initial.state === "conflict") {
       conflictNotice.hidden = false;

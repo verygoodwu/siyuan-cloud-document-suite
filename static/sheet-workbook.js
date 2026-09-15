@@ -780,6 +780,7 @@ export function captureWorkbookState(model, targetSheet = null) {
   }
   return {
     targetSheet,
+    workbookSheets: model.workbook.Workbook?.Sheets ? structuredClone(model.workbook.Workbook.Sheets) : null,
     sheets: sheetNames.map((name) => ({
       name,
       state: captureSheetState(model, name)
@@ -802,10 +803,24 @@ export function restoreWorkbookState(XLSX, model, state, shouldRecord = true) {
   if (!Array.isArray(state?.sheets) || state.sheets.length === 0) {
     throw new Error("无法恢复工作簿状态");
   }
-  if (state.sheets.some((item) => !model.workbook.SheetNames.includes(item?.name) || !item.state?.worksheet)) {
+  if (state.sheets.some((item) => !item?.name || !item.state?.worksheet
+    || (state.targetSheet && !model.workbook.SheetNames.includes(item.name)))) {
     throw new Error("工作簿结构已变化，无法恢复历史状态");
   }
+  if (!state.targetSheet) {
+    const names = state.sheets.map((item) => item.name);
+    for (const name of model.workbook.SheetNames) {
+      if (!names.includes(name)) delete model.workbook.Sheets[name];
+    }
+    model.workbook.SheetNames = names;
+    model.sheets = state.sheets.map(({ name }) => model.sheets.find((sheet) => sheet.name === name) || { name, data: [] });
+    for (const name of names) model.workbook.Sheets[name] ||= {};
+  }
   model.workbook.Workbook ||= {};
+  if (!state.targetSheet) {
+    if (state.workbookSheets) model.workbook.Workbook.Sheets = structuredClone(state.workbookSheets);
+    else delete model.workbook.Workbook.Sheets;
+  }
   if (state.workbookNames) model.workbook.Workbook.Names = structuredClone(state.workbookNames);
   else delete model.workbook.Workbook.Names;
   for (const item of state.sheets) restoreSheetState(XLSX, model, item.name, item.state, false);

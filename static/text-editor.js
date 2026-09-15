@@ -1,8 +1,9 @@
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
-import { editIndent, offsetForLine } from "./text-editor-core.js?v=__PLUGIN_VERSION__-text15";
-import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
+import { createTextMetrics, editIndent, offsetForLine } from "./text-editor-core.js?v=__PLUGIN_VERSION__-text15";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+let contentReadOnly = false;
 const RECOVERY_LIMIT = 1024 * 1024;
 const PREFERENCES_KEY = "siyuan-text-editor:preferences-v1";
 const LINE_HEIGHT = 20.8;
@@ -38,6 +39,8 @@ const replaceAllButton = document.querySelector("#replace-all");
 const savedAt = document.querySelector("#saved-at");
 const fullscreenButton = document.querySelector("#fullscreen");
 const encoder = new TextEncoder();
+const metrics = createTextMetrics();
+let sizeSource, sizeNewline, sizeBom, sizeBytes;
 const store = new SiyuanFileStore(asset, `siyuan-text-editor:${asset}`, { rawApi: true });
 const viewSession = createEditorSession("text", asset);
 const notice = createOperationNotice();
@@ -130,17 +133,15 @@ function serializedBytes() {
 }
 
 function updateGutter() {
-  const count = editor.value.split("\n").length;
+  const count = metrics.read(editor.value).lines;
   if (count === lastLineCount) return;
   lastLineCount = count;
   gutter.textContent = Array.from({ length: count }, (_, index) => index + 1).join("\n");
 }
 
 function updatePosition() {
-  const before = editor.value.slice(0, editor.selectionStart);
-  const line = before.split("\n").length;
-  const lastBreak = before.lastIndexOf("\n");
-  document.querySelector("#position").textContent = `行 ${line}，列 ${before.length - lastBreak}`;
+  const { line, column } = metrics.read(editor.value, editor.selectionStart);
+  document.querySelector("#position").textContent = `行 ${line}，列 ${column}`;
 }
 
 function updateCurrentLine() {
@@ -148,18 +149,22 @@ function updateCurrentLine() {
     currentLine.hidden = true;
     return;
   }
-  const line = editor.value.slice(0, editor.selectionStart).split("\n").length - 1;
+  const line = metrics.read(editor.value, editor.selectionStart).line - 1;
   const top = EDITOR_PADDING_TOP + line * LINE_HEIGHT - editor.scrollTop;
   currentLine.hidden = top + LINE_HEIGHT < 0 || top > editor.clientHeight;
   currentLine.style.transform = `translateY(${top}px)`;
 }
 
 function updateSize() {
-  document.querySelector("#size").textContent = displaySize(serializedBytes().byteLength);
+  if (sizeSource !== editor.value || sizeNewline !== newline || sizeBom !== hasBom) {
+    sizeBytes = serializedBytes().byteLength;
+    sizeSource = editor.value; sizeNewline = newline; sizeBom = hasBom;
+  }
+  document.querySelector("#size").textContent = displaySize(sizeBytes);
 }
 
 function updateStatistics() {
-  const lines = editor.value.split("\n").length;
+  const lines = metrics.read(editor.value).lines;
   const selected = Math.max(0, editor.selectionEnd - editor.selectionStart);
   document.querySelector("#statistics").textContent = selected
     ? `${lines} 行 · ${editor.value.length} 字符 · 已选 ${selected}`
@@ -220,6 +225,7 @@ async function saveNow(notify = false) {
     }
   } catch (error) {
     if (error instanceof SaveConflictError || error?.code === "SAVE_CONFLICT") {
+      contentReadOnly = true;
       editor.readOnly = true;
       setStatus("保存冲突：文件已在别处修改，为防止覆盖已暂停编辑", "error");
       notice.show("保存冲突：已暂停编辑并保留本机恢复内容", {
@@ -279,6 +285,7 @@ function renderPreview() {
 
 function schedulePreview() {
   window.clearTimeout(previewTimer);
+  if (!htmlFile || !previewVisible) return;
   previewTimer = window.setTimeout(renderPreview, 250);
 }
 
@@ -414,6 +421,7 @@ editor.addEventListener("click", () => { updateUi(); scheduleViewState(); });
 editor.addEventListener("select", scheduleViewState);
 editor.addEventListener("keyup", () => { updatePosition(); updateCurrentLine(); scheduleViewState(); });
 editor.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Tab") {
     event.preventDefault();
     changeIndent(event.shiftKey);
@@ -476,6 +484,7 @@ retrySaveButton.addEventListener("click", () => {
 recoveryButton.addEventListener("click", downloadCurrent);
 
 window.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229 || document.querySelector("dialog[open]")) return;
   if (event.key === "Escape" && !searchPanel.hidden) {
     event.preventDefault();
     searchPanel.hidden = true;
@@ -489,6 +498,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
+  if (["z", "y"].includes(key) && event.target !== editor) return;
   if (key === "s") { event.preventDefault(); void saveNow(true); }
   else if (key === "f") { event.preventDefault(); openSearch(); }
   else if (key === "h") { event.preventDefault(); openSearch(); replaceInput.focus(); }
@@ -522,6 +532,7 @@ window.addEventListener("pagehide", saveViewState);
 async function load({ restoreRecovery = true, reloaded = false } = {}) {
   try {
     editor.readOnly = false;
+    contentReadOnly = false;
     saveButton.disabled = false;
     setStatus(reloaded ? "正在重新加载…" : "正在加载…", "working");
     const bytes = await store.openRemote();
@@ -535,6 +546,7 @@ async function load({ restoreRecovery = true, reloaded = false } = {}) {
     } catch {
       text = new TextDecoder("utf-8").decode(source);
       editor.readOnly = true;
+      contentReadOnly = true;
       setStatus("检测到非 UTF-8 编码；为防止损坏，仅允许只读查看", "error");
     }
     if (!store.canEdit()) {
@@ -542,6 +554,7 @@ async function load({ restoreRecovery = true, reloaded = false } = {}) {
     }
     if (tooLarge) {
       editor.readOnly = true;
+      contentReadOnly = true;
       setStatus(`文件为 ${displaySize(bytes.byteLength)}，超过 5 MB 轻量编辑范围，已切换为只读`, "error");
     }
     newline = detectNewline(text);
@@ -605,4 +618,8 @@ recoveryButton.textContent = `下载恢复副本 .${extension}`;
 preview.hidden = !previewVisible;
 previewToggle.classList.toggle("active", previewVisible);
 
+watchEditLease(store, notice, setStatus, (allowed) => {
+  editor.readOnly = !allowed || contentReadOnly;
+  saveButton.disabled = editor.readOnly;
+});
 void load();

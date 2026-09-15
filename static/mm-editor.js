@@ -1,6 +1,6 @@
 import MindElixir from "./MindElixir.js?v=right-pan-1";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
-import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
+import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
   buildOutlineRows,
   calculateMindEditorRect,
@@ -1654,6 +1654,10 @@ try {
     const request = event.data;
     if (event.origin !== location.origin || request?.type !== "siyuan-cloud-document-export") return;
     if (request.asset === asset && request.format === "mm") downloadMm(mind);
+  });
+  watchEditLease(store, notice, setStatus, (allowed) => {
+    if (allowed) mind.enableEdit(); else mind.disableEdit();
+    nodeTools?.querySelectorAll("button,select,input").forEach((control) => { control.disabled = !allowed; });
   });
   if (!store.canEdit()) {
     nodeTools?.querySelectorAll("button,select,input").forEach((control) => { control.disabled = true; });

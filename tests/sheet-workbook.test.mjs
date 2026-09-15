@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 
 import {
   analyzeWorkbookCapabilities,
+  addWorksheet,
   applyRecoveryPayload,
   captureCellRange,
   captureSheetState,
@@ -59,6 +60,32 @@ function fixtureBytes() {
     cellStyles: true
   }));
 }
+
+test("workbook history restores added, renamed and deleted sheets including metadata and recovery", () => {
+  const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/history.xlsx");
+  setCellText(XLSX, model, "Calc", 0, 0, "41");
+  const before = captureWorkbookState(model);
+  addWorksheet(XLSX, model, "Second");
+  setCellText(XLSX, model, "Second", 0, 0, "saved");
+  renameWorksheet(model, "Calc", "Renamed");
+  const renamed = captureWorkbookState(model);
+  deleteWorksheet(model, "Renamed");
+  restoreWorkbookState(XLSX, model, renamed);
+  assert.deepEqual(model.workbook.SheetNames, ["Renamed", "Second"]);
+  assert.equal(model.workbook.Sheets.Renamed.A1.v, 41);
+  assert.equal(model.workbook.Sheets.Second.A1.v, "saved");
+  restoreWorkbookState(XLSX, model, before);
+  assert.deepEqual(model.workbook.SheetNames, ["Calc"]);
+  assert.equal(model.workbook.Sheets.Renamed, undefined);
+  assert.equal(model.workbook.Sheets.Calc.A1.v, 41);
+  restoreWorkbookState(XLSX, model, renamed);
+  const recovered = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/history.xlsx");
+  applyRecoveryPayload(XLSX, recovered, makeRecoveryPayload(model));
+  assert.deepEqual(recovered.workbook.SheetNames, ["Renamed", "Second"]);
+  assert.equal(recovered.workbook.Sheets.Renamed.A1.v, 41);
+  const reopened = parseWorkbookModel(XLSX, serializeWorkbookModel(XLSX, model), "/assets/history.xlsx");
+  assert.deepEqual(reopened.workbook.SheetNames, ["Renamed", "Second"]);
+});
 
 test("editing one cell preserves untouched formulas, merges, and column metadata", () => {
   const model = parseWorkbookModel(XLSX, fixtureBytes(), "/assets/完成度50%.xlsx");

@@ -96,6 +96,53 @@ test("encoded traversal cannot escape the assets directory", () => {
   }
 });
 
+test("unload release queues a beacon only while this page safely owns the lease", (context) => {
+  const restoreLocation = replaceGlobal("location", new URL("http://127.0.0.1:6806/plugins/test.html"));
+  const calls = [];
+  const restoreNavigator = replaceGlobal("navigator", {
+    sendBeacon(url, body) { calls.push({ url, body }); return true; }
+  });
+  context.after(() => { restoreNavigator(); restoreLocation(); });
+
+  const store = new SiyuanFileStore("/assets/quick.board.json", "recovery:quick");
+  store.leasePath = "/temp/siyuan-cloud-document-suite/edit-locks/quick.json";
+  store.leaseState = "acquired";
+  store.leaseExpiresAt = Date.now() + 30_000;
+  assert.equal(store.releaseEditLeaseOnUnload(), true);
+  assert.equal(store.leaseState, "released");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/file/removeFile");
+
+  const expiring = new SiyuanFileStore("/assets/expiring.board.json", "recovery:expiring");
+  expiring.leasePath = "/temp/siyuan-cloud-document-suite/edit-locks/expiring.json";
+  expiring.leaseState = "acquired";
+  expiring.leaseExpiresAt = Date.now() + 500;
+  assert.equal(expiring.releaseEditLeaseOnUnload(), false);
+  assert.equal(expiring.leaseState, "acquired");
+  assert.equal(calls.length, 1);
+});
+
+test("unload release falls back to a keepalive request when beacon cannot queue", async (context) => {
+  const restoreLocation = replaceGlobal("location", new URL("http://127.0.0.1:6806/plugins/test.html"));
+  const restoreNavigator = replaceGlobal("navigator", { sendBeacon: () => false });
+  let request;
+  const restoreFetch = replaceGlobal("fetch", async (url, init) => {
+    request = { url, init };
+    return Response.json({ code: 0 });
+  });
+  context.after(() => { restoreFetch(); restoreNavigator(); restoreLocation(); });
+
+  const store = new SiyuanFileStore("/assets/fallback.board.json", "recovery:fallback");
+  store.leasePath = "/temp/siyuan-cloud-document-suite/edit-locks/fallback.json";
+  store.leaseState = "acquired";
+  store.leaseExpiresAt = Date.now() + 30_000;
+  assert.equal(store.releaseEditLeaseOnUnload(), true);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.equal(request.url, "/api/file/removeFile");
+  assert.equal(request.init.keepalive, true);
+  assert.deepEqual(JSON.parse(request.init.body), { path: store.leasePath });
+});
+
 test("raw text mode reads exact asset bytes through the SiYuan file API", async (context) => {
   const restoreLocation = replaceGlobal(
     "location",
@@ -527,7 +574,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindHtml, /id="shortcut-dialog"[^>]*hidden/);
   assert.match(mindHtml, /id="focus-exit"[^>]*>返回完整脑图/);
   assert.match(mindHtml, /data-action="focus"[^>]*>聚焦分支/);
-  assert.match(mindHtml, /#map \.map-container\{background:#fff!important\}/);
+  assert.match(mindHtml, /#map \.map-container\{background:var\(--bg,#fff\)!important\}/);
   assert.match(mindHtml, /me-tpc\.task-done,me-tpc\.node-underlined\{text-decoration:none!important\}/);
   assert.match(mindHtml, /me-tpc\.task-done \.text\{color:#98a2b3!important;text-decoration-line:line-through!important/);
   assert.match(mindHtml, /me-tpc\.node-underlined \.text\{text-decoration-line:underline!important/);
@@ -722,10 +769,10 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.match(sheetScript, /grid\.addEventListener\("paste"/);
   assert.match(sheetScript, /grid\.addEventListener\("copy"/);
-  assert.match(sheetScript, /td\.contentEditable = store\.canEdit\(\) \? "plaintext-only" : "false"/);
+  assert.match(sheetScript, /td\.contentEditable = canEdit\(\) \? "plaintext-only" : "false"/);
   assert.doesNotMatch(sheetScript, /td\.contentEditable = editMode/);
   assert.doesNotMatch(sheetScript, /粘贴内容请先进入编辑模式/);
-  assert.match(sheetScript, /简约模式 · 可直接编辑单元格并自动写入思源/);
+  assert.match(sheetScript, /基础工具 · 可直接编辑单元格并自动写入思源/);
   assert.match(sheetScript, /event\.key === "Delete"/);
   assert.match(sheetScript, /event\.key === "Enter"/);
   assert.match(sheetScript, /event\.key === "Tab"/);

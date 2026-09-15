@@ -112,6 +112,8 @@ try {
   await wait(30);
   assert(doc.querySelector(`[data-node-id="${rectId}"] .whiteboard-node-text`).textContent === "Enter 编辑", "Escape did not cancel text edit");
   pass("direct-enter-f2-escape-input");
+  const nativeTrace = [];
+  for (const eventName of ["focus", "blur", "beforeinput", "input"]) textEditorInput().addEventListener(eventName, () => nativeTrace.push([eventName, textEditorInput().textContent, textEditor().hidden, doc.activeElement.id]));
 
   await selectNode(rectId);
   win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -122,7 +124,7 @@ try {
   textEditorInput().dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "真实输入已生效" }));
   textEditorInput().blur();
   await wait(30);
-  assert(doc.querySelector(`[data-node-id="${rectId}"] .whiteboard-node-text`).textContent === "真实输入已生效", "browser text insertion was not committed to the node");
+  assert(doc.querySelector(`[data-node-id="${rectId}"] .whiteboard-node-text`).textContent === "真实输入已生效", `browser text insertion was not committed to the node: ${JSON.stringify(nativeTrace)}`);
   pass("browser-native-text-insertion");
 
   const imageInput = doc.querySelector("#image-input");
@@ -393,8 +395,8 @@ try {
   doc.querySelector("#zoom-selection").click();
   assert(Number.parseInt(doc.querySelector("#zoom-value").textContent, 10) > 100, "zoom to selection did not focus the selected node");
   doc.querySelector("#fit").click();
-  win.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
-  win.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
+  win.dispatchEvent(new KeyboardEvent("keydown", { key: "1", ctrlKey: true, bubbles: true }));
   pass("pan-wheel-zoom-fit-selection");
 
   const downloads = [];

@@ -18,10 +18,12 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 
 ![Feature preview](preview.png)
 
-## What's new in v2.1.13
+## What's new in v2.2.0
 
-- Fixes shifted mind-map editing overlays when double-clicking nodes at different depths or on opposite branches.
-- Uses the rendered topic rectangle for every edit entry point and keeps the topic, editor, and connector aligned as input size changes.
+- Strengthens spreadsheet capability limits, conflict handling, workbook history, and focus restoration.
+- Improves whiteboard cancellation, read-only browsing, context menus, free connector endpoints, save coalescing, and history memory control.
+- Reduces repeated large-text cursor/statistics work and follows the SiYuan theme without polling or new dependencies.
+- Fixes stale edit locks after immediately reopening a whiteboard while preserving multi-page write protection.
 
 ## What's new in v2.1.12
 
@@ -35,6 +37,7 @@ This public release includes the work developed in v2.1.5–v2.1.12. See the [co
 
 ## Changelog (short version)
 
+- **v2.2.0**: Completes interaction and stability work across spreadsheets, whiteboards, text editing, and shared persistence. Adds safe internal dialogs, spreadsheet conflict actions, whiteboard context actions and free connector endpoints; reduces text statistics, viewport-save, and history overhead; follows the SiYuan theme; and fixes stale locks on immediate whiteboard reopen without weakening concurrent-edit protection.
 - **v2.1.13**: Uses rendered coordinates for double-click editing, keyboard-created nodes, and direct typing, fixing editor shifts caused by branch layout translations or zoom while keeping connectors synchronized as input size changes.
 - **v2.1.12**: Resolves the mind-map editor's versioned submodule URLs during packaging, preventing desktop and NAS browsers from reusing stale shared modules after an update. Includes all v2.1.11 features.
 - **v2.1.11**: Adds non-synchronized edit leases shared by browser sessions on one NAS/Linux/Docker kernel, byte-verifies uploaded assets, and marks plugin documents through initializing/ready creation phases. Verified browser backups can explicitly restore a missing 404 asset, while diagnostics no longer update the synchronized `drop-debug.json` file. This release also publishes the text editor, PDF workflow, type-aware exports, and unified editor experience developed in v2.1.5–v2.1.10.

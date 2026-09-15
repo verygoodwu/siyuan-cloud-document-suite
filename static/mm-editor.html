@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="stylesheet" href="./MindElixir.css?v=__PLUGIN_VERSION__">
   <style>
-    html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#fff}
+    html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:var(--bg,#fff)}
     #map{opacity:0}
     body.layout-ready #map{opacity:1}
-    #map .map-container{background:#fff!important}
+    #map .map-container{background:var(--bg,#fff)!important}
     #status,#help,#export,#view-style,#search-toggle,#shortcut-toggle,#focus-exit,#outline-toggle{position:fixed;z-index:20;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);box-shadow:0 1px 6px #0002;color:#667085;font:12px system-ui}
     #status{left:12px;right:auto;bottom:10px}#status[data-state="working"]{color:#3478f6}#status[data-state="saved"]{color:#2f9e44}#status[data-state="error"]{color:#d97706}
     #help{left:136px;right:238px;top:10px;pointer-events:none;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -88,6 +88,11 @@
     #input-box{box-sizing:border-box!important;margin:0!important;min-width:72px!important;max-width:min(480px,calc(100vw - 48px))!important;height:auto!important;min-height:34px!important;border:0!important;border-radius:7px!important;outline:0!important;background:#fff!important;color:#344054!important;box-shadow:0 0 0 2px #3478f6!important;white-space:pre-wrap!important;overflow-wrap:anywhere!important;line-height:1.5!important;caret-color:#175cd3}
     body.hierarchy-view .lines path,body.hierarchy-view .subLines path{stroke:#5d85ff!important;stroke-width:2px!important;stroke-linecap:round!important;stroke-linejoin:round!important}
     @media(max-width:760px){#help{display:none}#outline-toggle{right:178px}#workspace-panel{top:48px;right:8px;bottom:8px;width:calc(100vw - 16px)}#shortcut-dialog{top:48px;left:8px;width:calc(100vw - 16px)}}
+    #status,#help,#export,#view-style,#search-toggle,#shortcut-toggle,#outline-toggle,#workspace-panel,#shortcut-dialog{background:var(--panel,#fff);color:var(--text,#344054);border-color:var(--border,#e4e7ec)}
+    #workspace-search,.outline-topic,.outline-expander,#workspace-close{color:var(--text,#344054)}
+    #workspace-search{background:var(--bg,#fff);border-color:var(--border,#d0d5dd)}
+    .outline-topic:hover{background:var(--hover,#f2f4f7);color:var(--text,#344054)}
+    .outline-row.matched .outline-topic{background:var(--accent-soft,#eff8ff);color:var(--accent,#175cd3)}
   </style>
 </head>
 <body class="hierarchy-view">

@@ -30,6 +30,8 @@ const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const LEASE_DIRECTORY = "/temp/siyuan-cloud-document-suite/edit-locks";
 const LEASE_TTL_MS = 45_000;
 const LEASE_RENEW_MS = 15_000;
+const LEASE_RELEASE_GRACE_DELAYS = [80, 160, 280];
+const LEASE_UNLOAD_SAFETY_MS = 1_000;
 const utf8Encoder = new TextEncoder();
 
 function randomId() {
@@ -205,6 +207,14 @@ function cacheBusted(url) {
 }
 
 export class SiyuanFileStore {
+  get leaseState() { return this._leaseState; }
+
+  set leaseState(value) {
+    if (value === this._leaseState) return;
+    this._leaseState = value;
+    queueMicrotask(() => this.onLeaseChange?.(this.canEdit()));
+  }
+
   constructor(asset, recoveryKey, { rawApi = false, backupStore = defaultBackupStore } = {}) {
     if (!asset) throw new Error("缺少附件路径");
     const url = new URL(asset, location.origin);
@@ -385,7 +395,20 @@ export class SiyuanFileStore {
     }
     try {
       await this.postFile(LEASE_DIRECTORY, null, true);
-      const existing = await this.readWorkspaceJson(this.leasePath);
+      let existing = await this.readWorkspaceJson(this.leasePath);
+      // A previous iframe may have queued its unload release just before this
+      // one opened. Recheck briefly; never overwrite a live foreign lease.
+      if (existing?.owner && existing.owner !== this.leaseOwner && Number(existing.expiresAt) > Date.now()) {
+        for (const delay of LEASE_RELEASE_GRACE_DELAYS) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          const current = await this.readWorkspaceJson(this.leasePath);
+          if (!current?.owner || Number(current.expiresAt) <= Date.now()) {
+            existing = current;
+            break;
+          }
+          existing = current;
+        }
+      }
       if (existing?.owner && existing.owner !== this.leaseOwner && Number(existing.expiresAt) > Date.now()) {
         this.leaseState = "denied";
         this.leaseHolder = existing;
@@ -406,12 +429,15 @@ export class SiyuanFileStore {
         return { acquired: false, holder: confirmed };
       }
       this.leaseState = "acquired";
+      this.leaseExpiresAt = proposed.expiresAt;
       this.leaseHolder = null;
       clearInterval(this.leaseTimer);
       this.leaseTimer = setInterval(() => void this.renewEditLease(), LEASE_RENEW_MS);
       if (!this.releaseBound && typeof globalThis.addEventListener === "function") {
         this.releaseBound = true;
-        globalThis.addEventListener("pagehide", () => void this.releaseEditLease(), { once: true });
+        globalThis.addEventListener("pagehide", (event) => {
+          if (!event.persisted) this.releaseEditLeaseOnUnload();
+        });
       }
       return { acquired: true, holder: null };
     } catch (error) {
@@ -434,8 +460,10 @@ export class SiyuanFileStore {
         return false;
       }
       await this.writeLease({ ...current, expiresAt: Date.now() + LEASE_TTL_MS });
+      this.leaseExpiresAt = Date.now() + LEASE_TTL_MS;
       return true;
     } catch {
+      if (Date.now() >= (this.leaseExpiresAt || 0)) this.leaseState = "lost";
       return false;
     }
   }
@@ -468,6 +496,35 @@ export class SiyuanFileStore {
       });
       this.leaseState = "released";
       return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  releaseEditLeaseOnUnload() {
+    clearInterval(this.leaseTimer);
+    if (this.leaseState !== "acquired" || !this.leasePath) return false;
+    // Before expiry, a conforming peer cannot own this path. Near expiry we
+    // avoid an unconditional delete because a peer could legitimately acquire it.
+    if (Number(this.leaseExpiresAt) <= Date.now() + LEASE_UNLOAD_SAFETY_MS) return false;
+    const body = JSON.stringify({ path: this.leasePath });
+    this.leaseState = "released";
+    try {
+      if (typeof globalThis.navigator?.sendBeacon === "function") {
+        const queued = globalThis.navigator.sendBeacon(
+          "/api/file/removeFile",
+          new Blob([body], { type: "application/json" })
+        );
+        if (queued) return true;
+      }
+      void fetch("/api/file/removeFile", {
+        method: "POST",
+        credentials: "include",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body
+      }).catch(() => {});
+      return true;
     } catch {
       return false;
     }
