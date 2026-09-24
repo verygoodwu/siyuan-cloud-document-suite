@@ -26,7 +26,7 @@ import {
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
-const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm49`;
+const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm54`;
 const TEXT_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-text15`;
 
 const EDITOR_SELECTOR = ".protyle-wysiwyg";
@@ -582,6 +582,8 @@ class DropImporterPlugin extends Plugin {
     await this.recordDebug("import-start", { fileNames: files.map((file) => file.name), dropTarget });
     this.showToast(`正在导入 0/${files.length} 个文件…`);
     const uploaded: UploadedAsset[] = [];
+    const uploadFailures: string[] = [];
+    const previewFailures: string[] = [];
 
     for (const [index, file] of files.entries()) {
       this.showToast(`正在导入 ${index + 1}/${files.length}：${file.name}…`);
@@ -625,6 +627,7 @@ class DropImporterPlugin extends Plugin {
           }
         } catch (previewError) {
           console.error("[Drop Importer] Preview generation failed", previewError);
+          previewFailures.push(`${file.name}：${String(previewError)}`);
           await this.recordDebug("preview-failed", {
             fileName: file.name,
             reason: String(previewError)
@@ -633,6 +636,7 @@ class DropImporterPlugin extends Plugin {
         uploaded.push(asset);
       } catch (error) {
         console.error("[Drop Importer] Asset upload failed", error);
+        uploadFailures.push(`${file.name}：${String(error)}`);
         await this.recordDebug("import-file-failed", {
           fileName: file.name,
           reason: String(error)
@@ -642,7 +646,7 @@ class DropImporterPlugin extends Plugin {
 
     if (uploaded.length === 0) {
       await this.recordDebug("import-failed", { reason: "no-assets-uploaded" });
-      this.showToast("文件导入失败，请查看开发者控制台", true);
+      this.showToast(`文件导入失败：${uploadFailures[0] || "没有文件成功上传"}`, true);
       return;
     }
 
@@ -656,19 +660,21 @@ class DropImporterPlugin extends Plugin {
       }
     } catch (error) {
       console.error("[Drop Importer] Attachment insertion failed", error);
-      this.showToast("文件已上传，但附件链接插入失败", true);
+      this.showToast(`文件已上传，但预览/附件插入失败：${String(error)}`, true);
       await this.recordDebug("import-failed", { reason: String(error) });
       return;
     }
 
     const failedCount = files.length - uploaded.length;
     this.showToast(
-      failedCount === 0
-        ? `已导入 ${uploaded.length} 个文件`
-        : `已导入 ${uploaded.length} 个文件，${failedCount} 个失败`,
-      failedCount > 0
+      previewFailures.length > 0
+        ? `已导入 ${uploaded.length} 个文件，但 ${previewFailures.length} 个预览失败，已保留附件链接：${previewFailures[0]}`
+        : failedCount === 0
+          ? `已导入 ${uploaded.length} 个文件`
+          : `已导入 ${uploaded.length} 个文件，${failedCount} 个失败：${uploadFailures[0]}`,
+      failedCount > 0 || previewFailures.length > 0
     );
-    await this.recordDebug("import-complete", { uploaded, failedCount });
+    await this.recordDebug("import-complete", { uploaded, failedCount, uploadFailures, previewFailures });
   }
 
   private async postJson<T>(endpoint: string, body: unknown): Promise<T> {

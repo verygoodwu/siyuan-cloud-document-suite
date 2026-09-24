@@ -612,10 +612,11 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /for \(const historyAction of \["undo", "redo"\]\)/);
   assert.match(mindScript, /const result = nativeHistoryAction\(\.\.\.args\);[\s\S]*scheduleMindPersistence\(\);[\s\S]*refreshDecoratedLayout\(mind\)/);
   assert.match(mindScript, /roundedOrthogonalBranch/);
-  assert.match(mindScript, /sameRowTolerance/);
+  assert.match(mindScript, /Math\.abs\(childCenterY - parentCenterY\) <= 0\.5/);
+  assert.match(mindScript, /Math\.abs\(endRect\.top \+ endRect\.height \/ 2 - startRect\.top - startRect\.height \/ 2\) <= 0\.5/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
-  assert.match(mindScript, /return `M \$\{parentEdge\} \$\{lineY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm51/);
+  assert.match(mindScript, /return `M \$\{parentEdge\} \$\{parentCenterY\} H \$\{childEdge\}`/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm56/);
   assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);
@@ -867,7 +868,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(embedSource, /`\$\{this\.pluginVersion\}-board4`/);
   assert.match(embedSource, /`\$\{this\.pluginVersion\}-pdf2`/);
   assert.match(embedSource, /url\.searchParams\.set\("name", title\)/);
-  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm49`/);
+  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm54`/);
   assert.match(pluginSource, /const TEXT_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-text15`/);
   assert.match(pluginSource, /pdf-reader\.html/);
   assert.match(pluginSource, /searchParams\.set\("v", editorVersion\)/);

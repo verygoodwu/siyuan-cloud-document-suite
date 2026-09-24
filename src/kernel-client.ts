@@ -67,7 +67,17 @@ export class KernelClient {
       headers: { "Content-Type": "application/json", "Accept": "application/octet-stream" },
       body: JSON.stringify({ path: `/data/${normalized}` })
     });
+    // SiYuan reports getFile errors as HTTP 202 with a JSON error body. A NAS
+    // proxy can also return its login/error HTML as HTTP 200. Neither is an
+    // attachment: surface the actual stage instead of a vague hash mismatch.
+    if (response.status === 202) {
+      const failure = await response.json().catch(() => null) as KernelResponse<unknown> | null;
+      throw new Error(`Asset verification failed: ${failure?.msg || `SiYuan code ${failure?.code ?? 202}`}`);
+    }
     if (!response.ok) throw new Error(`Asset verification failed with HTTP ${response.status}`);
+    if (!/\.html?$/i.test(normalized) && response.headers.get("content-type")?.toLowerCase().includes("text/html")) {
+      throw new Error("Asset verification received HTML instead of file bytes; check NAS proxy login and /api/file/getFile routing");
+    }
     return new Uint8Array(await response.arrayBuffer());
   }
 

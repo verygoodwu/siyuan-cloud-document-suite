@@ -18,6 +18,13 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 
 ![Feature preview](preview.png)
 
+## What's new in v2.3.0
+
+- Redraws imported mind-map connectors from final node positions: a shared, softly rounded first-level trunk, straight single-child links, and automatic correction after zoom, font, or node-size changes.
+- Inserts available previews when files are dropped into document content, retaining attachment links for unknown formats or failed conversions.
+- Enables mobile-browser loading for previewing existing documents. Native mobile apps and desktop-style file dragging remain unsupported; physical iOS/Android devices have not been fully verified.
+- Separates upload, preview, and insertion errors, including SiYuan file API errors and NAS proxies returning login HTML.
+
 ## What's new in v2.2.0
 
 - Strengthens spreadsheet capability limits, conflict handling, workbook history, and focus restoration.
@@ -37,6 +44,7 @@ This public release includes the work developed in v2.1.5–v2.1.12. See the [co
 
 ## Changelog (short version)
 
+- **v2.3.0**: Improves `.mm` branch geometry and zoom alignment, content-drop previews, experimental mobile-browser previews, and NAS import diagnostics.
 - **v2.2.0**: Completes interaction and stability work across spreadsheets, whiteboards, text editing, and shared persistence. Adds safe internal dialogs, spreadsheet conflict actions, whiteboard context actions and free connector endpoints; reduces text statistics, viewport-save, and history overhead; follows the SiYuan theme; and fixes stale locks on immediate whiteboard reopen without weakening concurrent-edit protection.
 - **v2.1.13**: Uses rendered coordinates for double-click editing, keyboard-created nodes, and direct typing, fixing editor shifts caused by branch layout translations or zoom while keeping connectors synchronized as input size changes.
 - **v2.1.12**: Resolves the mind-map editor's versioned submodule URLs during packaging, preventing desktop and NAS browsers from reusing stale shared modules after an update. Includes all v2.1.11 features.
@@ -96,7 +104,7 @@ Development continues to focus on a lightweight, polished editing experience ins
 
 Legacy `.doc` files and web-link previews are not supported yet.
 
-For NAS Docker deployments, open SiYuan in a desktop browser. Files are uploaded from the current computer into the SiYuan workspace on the NAS. Mobile browser frontends are not supported yet.
+For NAS Docker deployments, desktop-browser imports upload files from the current computer into the SiYuan workspace on the NAS. Mobile-browser plugin loading is enabled for previewing existing documents, but iOS/Android devices have not yet been fully verified and desktop drag-and-drop import is unavailable there. If SiYuan itself reports an unsupported browser, use a browser supported by SiYuan. Native mobile app kernels remain unsupported.
 
 ## Install and develop
 

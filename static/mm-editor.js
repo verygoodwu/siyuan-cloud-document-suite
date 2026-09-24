@@ -51,6 +51,8 @@ let mindRenderFrame;
 let mindRenderRequested = false;
 let mindRenderReveal = false;
 let passiveDecorationFrame;
+let topicResizeObserver;
+const observedTopics = new Set();
 let mindInputAlignmentRequest = 0;
 let workspaceRenderFrame;
 let workspaceSelectionFrame;
@@ -170,10 +172,8 @@ function generateFeishuSubBranch({ pT, pL, pW, pH, cT, cL, cW, cH, direction }) 
   const childEdge = left ? cL + cW - gap : cL + gap;
   const parentCenterY = pT + pH / 2;
   const childCenterY = cT + cH / 2;
-  const sameRowTolerance = Math.max(8, Math.min(pH, cH) / 2);
-  if (Math.abs(childCenterY - parentCenterY) <= sameRowTolerance) {
-    const lineY = (parentCenterY + childCenterY) / 2;
-    return `M ${parentEdge} ${lineY} H ${childEdge}`;
+  if (Math.abs(childCenterY - parentCenterY) <= 0.5) {
+    return `M ${parentEdge} ${parentCenterY} H ${childEdge}`;
   }
   return roundedOrthogonalBranch(
     parentEdge,
@@ -591,12 +591,38 @@ function pathCoordinates(svg, startRect, endRect, left) {
 
 function branchPathFromRects(svg, startRect, endRect, left, elbowDistance) {
   const { startX, startY, endX, endY } = pathCoordinates(svg, startRect, endRect, left);
-  const sameRowTolerance = Math.max(8, Math.min(startRect.height, endRect.height) / 2);
-  if (Math.abs(endRect.top + endRect.height / 2 - startRect.top - startRect.height / 2) <= sameRowTolerance) {
-    const lineY = (startY + endY) / 2;
-    return `M ${startX} ${lineY} H ${endX}`;
+  if (Math.abs(endRect.top + endRect.height / 2 - startRect.top - startRect.height / 2) <= 0.5) {
+    return `M ${startX} ${startY} H ${endX}`;
   }
   return roundedOrthogonalBranch(startX, startY, endX, endY, elbowDistance);
+}
+
+function sharedMainBranchPaths(points) {
+  const first = points[0];
+  const sign = first.endX >= first.startX ? 1 : -1;
+  const nearestGap = Math.min(...points.map(({ startX, endX }) => Math.abs(endX - startX)));
+  const trunkX = first.startX + sign * Math.min(28, nearestGap / 2);
+  const branches = points.map((point) => {
+    const { endX, endY } = point;
+    const siblingGap = Math.min(...points.filter((other) => other !== point)
+      .map((other) => Math.abs(other.endY - endY)));
+    // Give every branch a soft quarter-turn. Reduce its radius near another
+    // branch or the root stub so the curves never bunch into a loop.
+    const radius = Math.min(8, Math.abs(endX - trunkX) / 2,
+      siblingGap / 2, Math.abs(endY - first.startY) / 2);
+    if (radius < 0.5) return { startY: endY, d: `M ${trunkX} ${endY} H ${endX}` };
+    const startY = endY + (endY < first.startY ? radius : -radius);
+    return {
+      startY,
+      d: `M ${trunkX} ${startY} Q ${trunkX} ${endY} ${trunkX + sign * radius} ${endY} H ${endX}`
+    };
+  });
+  return {
+    connectors: branches.map((branch) => branch.d),
+    trunk: `M ${trunkX} ${Math.min(first.startY, ...branches.map((branch) => branch.startY))}` +
+      ` V ${Math.max(first.startY, ...branches.map((branch) => branch.startY))}`,
+    root: `M ${first.startX} ${first.startY} H ${trunkX}`
+  };
 }
 
 function collectSubConnections(wrapper, connections) {
@@ -653,9 +679,15 @@ function alignVisibleHierarchy() {
       Math.min(...childRects.map((rect) => rect.top)) +
       Math.max(...childRects.map((rect) => rect.bottom))
     ) / 2;
+    // getBoundingClientRect uses screen pixels while CSS translateY uses
+    // unscaled layout pixels. Divide by the rendered scale so a zoomed map
+    // does not retain a 1px offset and turn a straight branch into a kink.
+    const scaleY = children.offsetHeight > 0
+      ? children.getBoundingClientRect().height / children.offsetHeight
+      : 1;
     const correction = Math.abs(parentCenter - childrenCenter) < 0.25
       ? 0
-      : Math.round((parentCenter - childrenCenter) * 100) / 100;
+      : Math.round((parentCenter - childrenCenter) / (scaleY || 1) * 100) / 100;
     if (correction) children.style.transform = `translateY(${correction}px)`;
 
     for (const childWrapper of childWrappers) alignWrapper(childWrapper);
@@ -672,15 +704,35 @@ function redrawVisibleBranches() {
   const mainSvg = document.querySelector("svg.lines");
   const mainWrappers = Array.from(document.querySelectorAll("me-main > me-wrapper"));
   if (rootTopic && mainSvg) {
-    const mainPaths = ensureBranchPaths(mainSvg, mainWrappers.length);
     const rootRect = rootTopic.getBoundingClientRect();
-    mainWrappers.forEach((wrapper, index) => {
+    const branches = mainWrappers.map((wrapper, index) => {
       const topic = wrapper.querySelector(":scope > me-parent > me-tpc");
-      const path = mainPaths[index];
-      if (!topic || !path) return;
+      if (!topic) return null;
       const left = wrapper.parentElement?.classList.contains("lhs") === true;
-      path.setAttribute("d", branchPathFromRects(mainSvg, rootRect, topic.getBoundingClientRect(), left, 28));
+      const topicRect = topic.getBoundingClientRect();
+      return { index, left, points: pathCoordinates(mainSvg, rootRect, topicRect, left), topicRect };
     });
+    const extraPaths = [];
+    for (const left of [false, true]) {
+      const side = branches.filter((branch) => branch && branch.left === left);
+      if (side.length < 2) {
+        for (const branch of side) {
+          branch.d = branchPathFromRects(mainSvg, rootRect, branch.topicRect, left, 28);
+        }
+        continue;
+      }
+      const shared = sharedMainBranchPaths(side.map((branch) => branch.points));
+      side.forEach((branch, index) => { branch.d = shared.connectors[index]; });
+      extraPaths.push(shared.trunk, shared.root);
+    }
+    const mainPaths = ensureBranchPaths(mainSvg, mainWrappers.length + extraPaths.length);
+    branches.forEach((branch, index) => {
+      mainPaths[index].setAttribute("d", branch?.d || "");
+    });
+    extraPaths.forEach((d, index) => {
+      mainPaths[mainWrappers.length + index].setAttribute("d", d);
+    });
+    for (const path of mainPaths.slice(mainWrappers.length + extraPaths.length)) path.setAttribute("d", "");
   }
   for (const wrapper of mainWrappers) {
     const svg = wrapper.querySelector(":scope > svg.subLines");
@@ -789,6 +841,21 @@ function queuePassiveDecorations(mind) {
   passiveDecorationFrame = requestAnimationFrame(() => {
     passiveDecorationFrame = undefined;
     decorateNodes(mind);
+    if (topicResizeObserver) {
+      for (const topic of observedTopics) {
+        if (topic.isConnected) continue;
+        topicResizeObserver.unobserve(topic);
+        observedTopics.delete(topic);
+      }
+      for (const topic of document.querySelectorAll("#map me-tpc")) {
+        if (observedTopics.has(topic)) continue;
+        topicResizeObserver.observe(topic);
+        observedTopics.add(topic);
+      }
+    }
+    // MindElixir may settle fonts and topic dimensions after refresh. Measure
+    // the final DOM rectangles instead of leaving its earlier SVG paths stale.
+    redrawVisibleBranches();
     queueWorkspaceRender(mind);
   });
 }
@@ -1590,6 +1657,13 @@ try {
     queuePassiveDecorations(mind);
   });
   observer.observe(document.querySelector("#map"), { childList: true, subtree: true });
+  if (typeof ResizeObserver !== "undefined") {
+    topicResizeObserver = new ResizeObserver(() => queuePassiveDecorations(mind));
+  }
+  window.addEventListener("resize", () => queuePassiveDecorations(mind));
+  window.visualViewport?.addEventListener("resize", () => queuePassiveDecorations(mind));
+  void document.fonts?.ready?.then(() => queuePassiveDecorations(mind));
+  queuePassiveDecorations(mind);
   decorateNodes(mind);
   renderWorkspace(mind);
   async function persistMind(force, notify = false) {

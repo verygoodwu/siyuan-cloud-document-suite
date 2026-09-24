@@ -14,35 +14,36 @@ await Promise.all([
   copyFile("index.css", "dist/index.css"),
   copyFile("README.md", "dist/README.md"),
   copyFile("README.zh-CN.md", "dist/README.zh-CN.md"),
+  copyFile("RELEASE_NOTES.md", "dist/RELEASE_NOTES.md"),
   copyFile("LICENSE", "dist/LICENSE"),
   copyFile("icon.png", "dist/icon.png"),
-  copyFile("preview.png", "dist/preview.png")
-  ,copyVersionedHtml("static/mm-editor.html", "dist/mm-editor.html")
-  ,copyVersionedHtml("static/mm-editor.js", "dist/mm-editor.js")
-  ,copyFile("static/mm-workspace.js", "dist/mm-workspace.js")
-  ,copyFile("node_modules/mind-elixir/dist/MindElixir.js", "dist/MindElixir.js")
-  ,copyFile("node_modules/mind-elixir/dist/MindElixir.css", "dist/MindElixir.css")
-  ,copyVersionedHtml("static/sheet-editor.html", "dist/sheet-editor.html")
-  ,copyVersionedHtml("static/sheet-editor.js", "dist/sheet-editor.js")
-  ,copyFile("static/sheet-workbook.js", "dist/sheet-workbook.js")
-  ,copyFile("static/siyuan-file-store.js", "dist/siyuan-file-store.js")
-  ,copyFile("static/editor-session.js", "dist/editor-session.js")
-  ,copyVersionedHtml("static/whiteboard-editor.html", "dist/whiteboard-editor.html")
-  ,copyVersionedHtml("static/whiteboard-editor.js", "dist/whiteboard-editor.js")
-  ,copyVersionedHtml("static/whiteboard-model.js", "dist/whiteboard-model.js")
-  ,copyVersionedHtml("static/whiteboard-renderer.js", "dist/whiteboard-renderer.js")
-  ,copyVersionedHtml("static/whiteboard-layout.js", "dist/whiteboard-layout.js")
-  ,copyVersionedHtml("static/whiteboard-interactions.js", "dist/whiteboard-interactions.js")
-  ,copyVersionedHtml("static/whiteboard-templates.js", "dist/whiteboard-templates.js")
-  ,copyVersionedHtml("static/document-print.html", "dist/document-print.html")
-  ,copyFile("static/document-print.js", "dist/document-print.js")
-  ,copyVersionedHtml("static/text-editor.html", "dist/text-editor.html")
-  ,copyVersionedHtml("static/text-editor.js", "dist/text-editor.js")
-  ,copyFile("static/text-editor-core.js", "dist/text-editor-core.js")
-  ,copyVersionedHtml("static/pdf-reader.html", "dist/pdf-reader.html")
-  ,copyVersionedHtml("static/pdf-reader.js", "dist/pdf-reader.js")
-  ,copyFile("static/pdf-reader-core.js", "dist/pdf-reader-core.js")
-  ,copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
+  copyFile("preview.png", "dist/preview.png"),
+  copyVersionedHtml("static/mm-editor.html", "dist/mm-editor.html"),
+  copyVersionedHtml("static/mm-editor.js", "dist/mm-editor.js"),
+  copyFile("static/mm-workspace.js", "dist/mm-workspace.js"),
+  copyFile("node_modules/mind-elixir/dist/MindElixir.js", "dist/MindElixir.js"),
+  copyFile("node_modules/mind-elixir/dist/MindElixir.css", "dist/MindElixir.css"),
+  copyVersionedHtml("static/sheet-editor.html", "dist/sheet-editor.html"),
+  copyVersionedHtml("static/sheet-editor.js", "dist/sheet-editor.js"),
+  copyFile("static/sheet-workbook.js", "dist/sheet-workbook.js"),
+  copyFile("static/siyuan-file-store.js", "dist/siyuan-file-store.js"),
+  copyFile("static/editor-session.js", "dist/editor-session.js"),
+  copyVersionedHtml("static/whiteboard-editor.html", "dist/whiteboard-editor.html"),
+  copyVersionedHtml("static/whiteboard-editor.js", "dist/whiteboard-editor.js"),
+  copyVersionedHtml("static/whiteboard-model.js", "dist/whiteboard-model.js"),
+  copyVersionedHtml("static/whiteboard-renderer.js", "dist/whiteboard-renderer.js"),
+  copyVersionedHtml("static/whiteboard-layout.js", "dist/whiteboard-layout.js"),
+  copyVersionedHtml("static/whiteboard-interactions.js", "dist/whiteboard-interactions.js"),
+  copyVersionedHtml("static/whiteboard-templates.js", "dist/whiteboard-templates.js"),
+  copyVersionedHtml("static/document-print.html", "dist/document-print.html"),
+  copyFile("static/document-print.js", "dist/document-print.js"),
+  copyVersionedHtml("static/text-editor.html", "dist/text-editor.html"),
+  copyVersionedHtml("static/text-editor.js", "dist/text-editor.js"),
+  copyFile("static/text-editor-core.js", "dist/text-editor-core.js"),
+  copyVersionedHtml("static/pdf-reader.html", "dist/pdf-reader.html"),
+  copyVersionedHtml("static/pdf-reader.js", "dist/pdf-reader.js"),
+  copyFile("static/pdf-reader-core.js", "dist/pdf-reader-core.js"),
+  copyFile("node_modules/xlsx/dist/xlsx.full.min.js", "dist/xlsx.full.min.js")
 ]);
 
 const zip = new JSZip();

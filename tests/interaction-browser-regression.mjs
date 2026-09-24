@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, mkdtemp } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile } from "node:fs/promises";
 import { resolve, extname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -25,6 +25,9 @@ files.set("/data/assets/big.xlsx", XLSX.write(big, { type: "buffer", bookType: "
 files.set("/data/assets/test.txt", Buffer.from("original text"));
 files.set("/data/assets/theme.txt", Buffer.from("theme test"));
 files.set("/data/assets/theme.mm", Buffer.from('<map version="1.0.1"><node TEXT="中心主题" ID="root"><node TEXT="子节点" ID="child" POSITION="right"/></node></map>'));
+files.set("/data/assets/imported.mm", Buffer.from('<?xml version="1.0" encoding="UTF-8"?><map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="afafaf" COLOR="#ffffff" BACKGROUND_COLOR="#3f73f1"><font BOLD="true"/><node TEXT="q" ID="branch" STYLE="bubble" POSITION="right"><node TEXT="45646546" ID="nested" STYLE="fork"><node TEXT="输入文字" ID="leaf-a" STYLE="fork"/><node TEXT="556465465" ID="leaf-b" STYLE="fork"/><node TEXT="56asf4a54fa6" ID="leaf-c" STYLE="fork"/></node></node><node TEXT="13216541" ID="middle" STYLE="bubble" POSITION="right"/><node TEXT="456465161" ID="lower-a" STYLE="bubble" POSITION="right"/><node TEXT="456465465" ID="lower-b" STYLE="bubble" POSITION="right"/></node></map>'));
+files.set("/data/assets/mixed.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="2"><node ID="root" TEXT="两侧"><node ID="l1" TEXT="左一" POSITION="left"/><node ID="l2" TEXT="左二" POSITION="left"/><node ID="r1" TEXT="右一" POSITION="right"/><node ID="r2" TEXT="右二" POSITION="right"/></node></map>'));
+files.set("/data/assets/five.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="五条支路"><node ID="b1" TEXT="计划" POSITION="right"><node ID="c1" TEXT="下一步"/></node><node ID="b2" TEXT="设计" POSITION="right"><node ID="c2" TEXT="规范"/></node><node ID="b3" TEXT="开发" POSITION="right"><node ID="c3" TEXT="实现"/></node><node ID="b4" TEXT="测试" POSITION="right"><node ID="c4" TEXT="验收"/></node><node ID="b5" TEXT="发布" POSITION="right"><node ID="c5" TEXT="上线"/></node></node></map>'));
 const board = Buffer.from(JSON.stringify({ schema: "siyuan-cloud-whiteboard", version: 1, title: "Test", viewport: { x: 300, y: 200, zoom: 1 }, nodes: [] }));
 files.set("/data/assets/test.board.json", board);
 const server = createServer(async (req, res) => {
@@ -193,8 +196,10 @@ try {
   checks.push("conflict recovery download contains local edits without altering remote workbook");
   await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === '覆盖远端').click()");
   await key("Escape");
+  await until("document.querySelector('.cloud-dialog') === null");
   assert.equal(XLSX.read(files.get('/data/assets/test.xlsx')).Sheets.First.A1.v, 900);
   await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === '覆盖远端').click()");
+  await until("document.querySelector('.cloud-dialog[open]') !== null");
   await click('.cloud-dialog button[type="submit"]');
   await until("document.querySelector('#status').textContent.includes('已写入')");
   assert.equal(XLSX.read(files.get('/data/assets/test.xlsx')).Sheets.First.A1.v, 456);
@@ -420,6 +425,109 @@ try {
   await evaluate("document.documentElement.setAttribute('data-theme-mode','light')");
   await until("getComputedStyle(document.querySelector('#map .map-container')).backgroundColor === 'rgb(255, 255, 255)'");
   checks.push("mind-map loads and changes canvas theme without altering node colors");
+  await navigate("mm-editor", "/assets/imported.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 9");
+  const importedGeometry = await evaluate(`(()=>{
+    const centerY = (element) => { const rect = element.getBoundingClientRect(); return rect.top + rect.height / 2; };
+    const screenPoint = (path, end) => {
+      const point = path.getPointAtLength(end ? path.getTotalLength() : 0);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+      return { x: screen.x, y: screen.y };
+    };
+    const root = document.querySelector('me-root > me-tpc');
+    const mainSvg = document.querySelector('svg.lines');
+    const wrappers = [...document.querySelectorAll('me-main > me-wrapper')];
+    const paths = [...mainSvg.querySelectorAll(':scope > path')];
+    const branches = wrappers.map((wrapper, index) => {
+      const topic = wrapper.querySelector(':scope > me-parent > me-tpc');
+      return {
+        text: topic.textContent.trim(),
+        rootCenterY: centerY(root),
+        topicCenterY: centerY(topic),
+        start: screenPoint(paths[index], false),
+        end: screenPoint(paths[index], true),
+        d: paths[index].getAttribute('d')
+      };
+    });
+    return {
+      branches,
+      pathCount: paths.length,
+      trunk: paths[wrappers.length].getAttribute('d'),
+      rootStub: paths[wrappers.length + 1].getAttribute('d'),
+      rootStubStart: screenPoint(paths[wrappers.length + 1], false),
+      rootStubEnd: screenPoint(paths[wrappers.length + 1], true)
+    };
+  })()`);
+  assert.equal(importedGeometry.pathCount, 6);
+  assert.match(importedGeometry.trunk, /^M .* V /);
+  assert.match(importedGeometry.rootStub, /^M .* H /);
+  assert.ok(Math.abs(importedGeometry.rootStubStart.y - importedGeometry.branches[0].rootCenterY) < 0.75);
+  assert.ok(Math.abs(importedGeometry.rootStubEnd.y - importedGeometry.branches[0].rootCenterY) < 0.75);
+  assert.ok(importedGeometry.branches.filter((branch) => branch.d.includes(" Q ")).length >= 3,
+    "main branches lost their soft rounded junctions");
+  for (const geometry of importedGeometry.branches) {
+    assert.ok(Math.abs(geometry.start.x - importedGeometry.rootStubEnd.x) < 0.75, `${geometry.text} connector misses the shared trunk`);
+    assert.ok(Math.abs(geometry.end.y - geometry.topicCenterY) < 0.75, `${geometry.text} connector misses the imported topic center`);
+  }
+  checks.push("imported mind-map uses one straight root stub, shared trunk, and aligned child connectors");
+  const nestedLine = await evaluate(`(()=>{
+    const wrapper = [...document.querySelectorAll('me-main > me-wrapper')].find((item) => item.querySelector(':scope > me-parent > me-tpc')?.textContent.trim() === 'q');
+    const svg = wrapper.querySelector(':scope > svg.subLines');
+    const parent = wrapper.querySelector(':scope > me-parent > me-tpc').getBoundingClientRect();
+    const child = wrapper.querySelector(':scope > me-children > me-wrapper > me-parent > me-tpc').getBoundingClientRect();
+    return { paths: [...svg.querySelectorAll(':scope > path')].map((path) => path.getAttribute('d')),
+      parentY: parent.top + parent.height / 2, childY: child.top + child.height / 2 };
+  })()`);
+  assert.match(nestedLine.paths[0], /^M [\d.-]+ [\d.-]+ H [\d.-]+$/);
+  assert.ok(Math.abs(nestedLine.parentY - nestedLine.childY) < 0.25);
+  checks.push("single nested branch stays perfectly horizontal under map zoom");
+  if (process.env.MM_SCREENSHOT_PATH) {
+    const screenshot = await command("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.MM_SCREENSHOT_PATH, Buffer.from(screenshot.data, "base64"));
+  }
+  await evaluate("document.querySelector('me-main > me-wrapper me-tpc').style.paddingBottom = '28px'");
+  await until(`(()=>{
+    const topic = document.querySelector('me-main > me-wrapper me-tpc');
+    const path = document.querySelector('svg.lines > path');
+    const point = path.getPointAtLength(path.getTotalLength());
+    const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+    const rect = topic.getBoundingClientRect();
+    return Math.abs(screen.y - rect.top - rect.height / 2) < 0.75;
+  })()`);
+  checks.push("mind-map connectors follow a topic resize without a manual refresh");
+  await navigate("mm-editor", "/assets/mixed.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-main > me-wrapper').length === 4");
+  const mixedBranches = await evaluate(`(()=>{
+    const paths = [...document.querySelectorAll('svg.lines > path')];
+    const wrappers = [...document.querySelectorAll('me-main > me-wrapper')];
+    return {
+      count: paths.length,
+      valid: paths.every((path) => path.getAttribute('d') && !/NaN|Infinity/.test(path.getAttribute('d'))),
+      aligned: wrappers.every((wrapper, index) => {
+        const topic = wrapper.querySelector(':scope > me-parent > me-tpc');
+        const path = paths[index];
+        const point = path.getPointAtLength(path.getTotalLength());
+        const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM());
+        const rect = topic.getBoundingClientRect();
+        const left = wrapper.parentElement.classList.contains('lhs');
+        return Math.abs(screen.x - (left ? rect.right : rect.left)) < 0.75 && Math.abs(screen.y - rect.top - rect.height / 2) < 0.75;
+      })
+    };
+  })()`);
+  assert.deepEqual(mixedBranches, { count: 8, valid: true, aligned: true });
+  checks.push("mixed left/right mind-map branches share separate trunks without invalid geometry");
+  await command("Emulation.setDeviceMetricsOverride", { width: 1100, height: 700, deviceScaleFactor: 1, mobile: false });
+  await navigate("mm-editor", "/assets/five.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 11");
+  assert.equal(await evaluate("document.querySelectorAll('svg.lines > path').length"), 7);
+  assert.equal(await evaluate("[...document.querySelectorAll('me-main > me-wrapper svg.subLines > path:first-child')].filter(path => /^M [\\d.-]+ [\\d.-]+ H [\\d.-]+$/.test(path.getAttribute('d'))).length"), 5);
+  checks.push("five-way trunk has five branches and five straight follow-up connections");
+  if (process.env.MM_FIVE_SCREENSHOT_PATH) {
+    const screenshot = await command("Page.captureScreenshot", { format: "png" });
+    await writeFile(process.env.MM_FIVE_SCREENSHOT_PATH, Buffer.from(screenshot.data, "base64"));
+  }
+  await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await navigate("mm-editor", "/assets/imported.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 9");
+  assert.equal(await evaluate("document.querySelector('#map').getBoundingClientRect().width"), 390);
+  assert.equal(await evaluate("document.querySelectorAll('svg.lines > path').length"), 6);
+  checks.push("mobile-width browser renders the imported mind map and its connectors");
   await evaluate("localStorage.clear()");
   await command("Page.navigate", { url: "about:blank" });
   await wait(150);

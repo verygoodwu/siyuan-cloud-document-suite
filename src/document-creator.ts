@@ -28,7 +28,10 @@ export class DocumentCreator {
   async insertAttachmentBlock(target: DropTarget, assets: UploadedAsset[]): Promise<void> {
     await this.api.postJson<unknown>("/api/block/insertBlock", {
       dataType: "markdown",
-      data: buildAttachmentMarkdown(assets),
+      // A drop into the editor should have the same preview as a drop into the
+      // document tree. Keep the attachment fallback for unsupported formats or
+      // a preview conversion that failed after the upload succeeded.
+      data: assets.map((asset) => asset.documentMarkdown?.trim() || buildAttachmentMarkdown([asset])).join("\n\n"),
       previousID: target.id
     });
   }
