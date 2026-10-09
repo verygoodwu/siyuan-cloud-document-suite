@@ -1,3 +1,4 @@
+import { applyPlatformShortcutHints } from "./platform-shortcuts.js?v=__PLUGIN_VERSION__";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
 import { createTextMetrics, editIndent, offsetForLine } from "./text-editor-core.js?v=__PLUGIN_VERSION__-text15";
 import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
@@ -623,3 +624,5 @@ watchEditLease(store, notice, setStatus, (allowed) => {
   saveButton.disabled = editor.readOnly;
 });
 void load();
+
+applyPlatformShortcutHints(document);

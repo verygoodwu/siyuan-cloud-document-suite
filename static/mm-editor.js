@@ -1,3 +1,4 @@
+import { formatShortcutHint, applyPlatformShortcutHints } from "./platform-shortcuts.js?v=__PLUGIN_VERSION__";
 import MindElixir from "./MindElixir.js?v=right-pan-1";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
 import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
@@ -1264,7 +1265,7 @@ try {
   });
   await mind.init(data);
   document.title = `${assetFileName} · 脑图`;
-  document.querySelector("#help").textContent = `${assetFileName}　·　Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开`;
+  document.querySelector("#help").textContent = formatShortcutHint(`${assetFileName}　·　Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开`);
   const nativeGetData = mind.getData.bind(mind);
   mind.getData = () => {
     const snapshot = nativeGetData();
@@ -1756,3 +1757,5 @@ try {
     setStatus(error instanceof Error ? error.message : String(error));
   }
 }
+
+applyPlatformShortcutHints(document);

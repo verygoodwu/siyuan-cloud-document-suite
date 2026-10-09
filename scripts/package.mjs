@@ -28,6 +28,7 @@ await Promise.all([
   copyFile("static/sheet-workbook.js", "dist/sheet-workbook.js"),
   copyFile("static/siyuan-file-store.js", "dist/siyuan-file-store.js"),
   copyFile("static/editor-session.js", "dist/editor-session.js"),
+  copyFile("static/platform-shortcuts.js", "dist/platform-shortcuts.js"),
   copyVersionedHtml("static/whiteboard-editor.html", "dist/whiteboard-editor.html"),
   copyVersionedHtml("static/whiteboard-editor.js", "dist/whiteboard-editor.js"),
   copyVersionedHtml("static/whiteboard-model.js", "dist/whiteboard-model.js"),

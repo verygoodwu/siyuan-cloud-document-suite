@@ -1,3 +1,4 @@
+import { formatShortcutHint, applyPlatformShortcutHints } from "./platform-shortcuts.js?v=__PLUGIN_VERSION__";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
 import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, trimSnapshotHistory, watchEditLease } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
@@ -289,8 +290,8 @@ function render() {
   positionSelectionToolbar(bounds);
   undoButton.disabled = !store.canEdit() || historyIndex <= 0;
   redoButton.disabled = !store.canEdit() || historyIndex >= history.length - 1;
-  undoButton.title = !store.canEdit() ? "只读模式，不能撤销" : historyIndex <= 0 ? "没有可撤销的操作" : "撤销（Ctrl+Z）";
-  redoButton.title = !store.canEdit() ? "只读模式，不能重做" : historyIndex >= history.length - 1 ? "没有可重做的操作" : "重做（Ctrl+Y / Ctrl+Shift+Z）";
+  undoButton.title = !store.canEdit() ? "只读模式，不能撤销" : historyIndex <= 0 ? "没有可撤销的操作" : formatShortcutHint("撤销（Ctrl+Z）");
+  redoButton.title = !store.canEdit() ? "只读模式，不能重做" : historyIndex >= history.length - 1 ? "没有可重做的操作" : formatShortcutHint("重做（Ctrl+Y / Ctrl+Shift+Z）");
 }
 
 function renderSelectionOnly() {
@@ -1676,3 +1677,5 @@ async function start() {
 }
 
 void start();
+
+applyPlatformShortcutHints(document);

@@ -14,9 +14,16 @@
 [![最新版本](https://img.shields.io/github/v/release/verygoodwu/siyuan-cloud-document-suite?label=release)](https://github.com/verygoodwu/siyuan-cloud-document-suite/releases/latest)
 [![许可证](https://img.shields.io/github/license/verygoodwu/siyuan-cloud-document-suite)](./LICENSE)
 
-在思源笔记中导入、预览、创建、编辑和导出文档、真实纯文本文件、表格、脑图与白板。支持 Windows 桌面端，以及 Linux/Docker 内核的桌面浏览器端。文本、Excel、FreeMind 脑图与白板的修改会自动写回思源附件，并更新文档同步修订标记；本机缓存仅用于失败恢复。
+在思源笔记中导入、预览、创建、编辑和导出文档、真实纯文本文件、表格、脑图与白板。支持 Windows/macOS 桌面端，以及 Linux/Docker 内核的桌面浏览器端。文本、Excel、FreeMind 脑图与白板的修改会自动写回思源附件，并更新文档同步修订标记；本机缓存仅用于失败恢复。
 
 ![功能预览](preview.png)
+
+## v2.3.1 重点更新
+
+- 新增 macOS 平台声明；文本、表格、脑图和白板按平台显示 Command 快捷键提示。
+- 已在 Apple Silicon、思源 3.8.6 实测 TXT 保存回读、脑图新增/编辑/撤销重做及 PDF 预览/取消/生成。
+- 中文输入法候选全过程、实体触控板、Mac 拖放、完整表格/白板回归和 Intel Mac 仍未验证；Windows/Linux 本次未做实机回归。
+- 86 项自动测试、类型检查、构建与安装包校验通过；保留保存恢复、冲突保护和 HTML 沙箱，不增加依赖。
 
 ## v2.3.0 重点更新
 

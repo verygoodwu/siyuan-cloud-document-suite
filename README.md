@@ -14,9 +14,16 @@ Tip: This plugin focuses on lightweight editing. Import simple spreadsheets and 
 [![Latest release](https://img.shields.io/github/v/release/verygoodwu/siyuan-cloud-document-suite?label=release)](https://github.com/verygoodwu/siyuan-cloud-document-suite/releases/latest)
 [![License](https://img.shields.io/github/license/verygoodwu/siyuan-cloud-document-suite)](./LICENSE)
 
-Import, preview, create, edit, and export documents, real text files, spreadsheets, mind maps, and whiteboards in SiYuan. Supports SiYuan Desktop on Windows and desktop browsers connected to Linux/Docker kernels. Text, Excel, FreeMind, and whiteboard edits are written back to SiYuan assets and update a document sync revision marker; local browser storage is used only for recovery.
+Import, preview, create, edit, and export documents, real text files, spreadsheets, mind maps, and whiteboards in SiYuan. Supports SiYuan Desktop on Windows/macOS and desktop browsers connected to Linux/Docker kernels. Text, Excel, FreeMind, and whiteboard edits are written back to SiYuan assets and update a document sync revision marker; local browser storage is used only for recovery.
 
 ![Feature preview](preview.png)
+
+## What's new in v2.3.1
+
+- Adds macOS platform declarations and Command shortcut hints across text, spreadsheet, mind-map, and whiteboard editors.
+- Tested on Apple Silicon with SiYuan 3.8.6: TXT save/reload, mind-map creation/editing/undo/redo, and PDF preview/cancellation/generation.
+- Native IME composition, physical trackpad gestures, Mac drag/drop, full spreadsheet/whiteboard regressions, and Intel Macs remain unverified; no physical Windows/Linux regression in this release.
+- 86 automated tests, type checking, build, and package verification passed; preserves saving/recovery, conflict protection and HTML sandbox boundaries without new dependencies.
 
 ## What's new in v2.3.0
 

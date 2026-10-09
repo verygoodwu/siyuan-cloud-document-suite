@@ -1,3 +1,4 @@
+import { formatShortcutHint, applyPlatformShortcutHints } from "./platform-shortcuts.js?v=__PLUGIN_VERSION__";
 import { SaveConflictError, SiyuanFileStore } from "./siyuan-file-store.js?v=__PLUGIN_VERSION__-sync2";
 import { createEditorSession, createOperationNotice, downloadBytes, showLeaseState, showStoreOpenError, watchEditLease, editorDialog } from "./editor-session.js?v=__PLUGIN_VERSION__-session2";
 import {
@@ -373,8 +374,8 @@ import {
   function updateHistoryButtons() {
     undoButton.disabled = undoStack.length === 0;
     redoButton.disabled = redoStack.length === 0;
-    undoButton.title = undoButton.disabled ? "没有可撤销的操作" : "撤销（Ctrl+Z）";
-    redoButton.title = redoButton.disabled ? "没有可重做的操作" : "重做（Ctrl+Y / Ctrl+Shift+Z）";
+    undoButton.title = undoButton.disabled ? "没有可撤销的操作" : formatShortcutHint("撤销（Ctrl+Z）");
+    redoButton.title = redoButton.disabled ? "没有可重做的操作" : formatShortcutHint("重做（Ctrl+Y / Ctrl+Shift+Z）");
   }
 
   function snapshotsEqual(first, second) {
@@ -2483,3 +2484,5 @@ import {
     }
   });
 })();
+
+applyPlatformShortcutHints(document);
