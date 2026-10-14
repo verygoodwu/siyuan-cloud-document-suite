@@ -52,7 +52,8 @@ const head = api("git/ref/heads/main").object.sha;
 if (head !== expectedHead) {
   throw new Error(`Remote main changed: expected ${expectedHead}, found ${head}. Review it before retrying.`);
 }
-const remote = api(`git/trees/${head}?recursive=1`);
+const remoteCommit = api(`git/commits/${head}`);
+const remote = api(`git/trees/${remoteCommit.tree.sha}?recursive=1`);
 if (remote.truncated) throw new Error("Remote tree response is truncated.");
 const entries = git(["ls-tree", "-rz", "HEAD"]).split("\0").filter(Boolean).map((record) => {
   const match = record.match(/^(\d+) blob ([a-f0-9]+)\t([\s\S]+)$/);
