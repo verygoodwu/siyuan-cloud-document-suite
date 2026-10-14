@@ -26,7 +26,7 @@ import {
 
 declare const __PLUGIN_VERSION__: string;
 const PLUGIN_VERSION = __PLUGIN_VERSION__;
-const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm54`;
+const MM_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-mm56`;
 const TEXT_EDITOR_CACHE_VERSION = `${PLUGIN_VERSION}-text15`;
 
 const EDITOR_SELECTOR = ".protyle-wysiwyg";
