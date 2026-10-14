@@ -77,6 +77,8 @@ pnpm build
 
 `pnpm build` 会生成 `dist/` 和可直接发布到 GitHub Release 的 `package.zip`。
 
+维护者发布新版本请按[集市发布文档](./docs/发布到思源集市.md)执行 `scripts/release.ps1`。
+
 ## 隐私
 
 文档解析和编辑在本地完成。插件不会主动上传文件到第三方服务；附件仅保存到当前思源工作空间。

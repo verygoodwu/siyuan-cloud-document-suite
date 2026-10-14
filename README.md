@@ -65,6 +65,8 @@ pnpm build
 
 The build creates both `dist/` and a marketplace-ready `package.zip`.
 
+Maintainers can follow the [marketplace release guide](./docs/发布到思源集市.md) and run `scripts/release.ps1` for future releases.
+
 ## Privacy
 
 Document parsing and editing happen locally. The plugin does not intentionally send files to third-party services; attachments stay in the current SiYuan workspace.
