@@ -767,6 +767,21 @@ function redrawVisibleBranches() {
     ? Array.from(document.querySelectorAll("me-tpc")).find((topic) => topic.style.opacity === "0")
     : undefined;
   if (input && (editingId || hiddenTopic)) {
+    const editingTopic = editingId
+      ? Array.from(document.querySelectorAll("me-tpc")).find((topic) => topic.nodeObj?.id === editingId)
+      : hiddenTopic;
+    const host = document.querySelector("#map me-nodes");
+    if (editingTopic && host && input.offsetHeight) {
+      const editorRect = calculateMindEditorRect(
+        host.getBoundingClientRect(),
+        editingTopic.getBoundingClientRect(),
+        host.offsetWidth,
+        host.offsetHeight
+      );
+      // Keep the editor centered on its hidden topic after its height changes.
+      // Otherwise a horizontal one-child branch gains a small elbow.
+      input.style.top = `${editorRect.top + (editorRect.height - input.offsetHeight) / 2}px`;
+    }
     for (const wrapper of mainWrappers) {
       const svg = wrapper.querySelector(":scope > svg.subLines");
       if (!svg) continue;
@@ -1265,7 +1280,9 @@ try {
   });
   await mind.init(data);
   document.title = `${assetFileName} · 脑图`;
-  document.querySelector("#help").textContent = formatShortcutHint(`${assetFileName}　·　Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开`);
+  const help = document.querySelector("#help");
+  help.textContent = formatShortcutHint(`${assetFileName}　·　按住右键拖动：移动画布　·　Tab：子节点　·　Enter：同级节点　·　Ctrl+/：收起或展开`);
+  help.title = help.textContent;
   const nativeGetData = mind.getData.bind(mind);
   mind.getData = () => {
     const snapshot = nativeGetData();
@@ -1358,6 +1375,20 @@ try {
     clearTimeout(viewTimer);
     viewTimer = setTimeout(saveViewState, 180);
   };
+  let mapWasFullscreen = document.fullscreenElement === mind.el;
+  mind.el.addEventListener("fullscreenchange", () => {
+    const mapIsFullscreen = document.fullscreenElement === mind.el;
+    const exited = mapWasFullscreen && !mapIsFullscreen;
+    mapWasFullscreen = mapIsFullscreen;
+    if (!exited) return;
+    // MindElixir restores the pre-fullscreen pan offset on exit. After the
+    // iframe has its normal size again, center the map in that viewport.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      mind.toCenter();
+      redrawVisibleBranches();
+      scheduleViewState();
+    }));
+  });
   const restoreSavedView = () => {
     const hasTransform = typeof savedView.transform === "string" && savedView.transform.trim() && savedView.transform !== "none";
     if (hasTransform) {
@@ -1519,6 +1550,12 @@ try {
   });
   document.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
+    if (key === "escape" && document.fullscreenElement === mind.el) {
+      event.preventDefault();
+      event.stopPropagation();
+      void document.exitFullscreen();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && key === "s") {
       event.preventDefault();
       if (isTextEditingTarget(event.target)) event.target.blur?.();
@@ -1653,6 +1690,7 @@ try {
     });
     if (onlyInputMutations) {
       resizeMindInputBox(document.querySelector("#input-box"));
+      redrawVisibleBranches();
       return;
     }
     queuePassiveDecorations(mind);
