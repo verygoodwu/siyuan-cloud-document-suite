@@ -25,6 +25,7 @@ files.set("/data/assets/big.xlsx", XLSX.write(big, { type: "buffer", bookType: "
 files.set("/data/assets/test.txt", Buffer.from("original text"));
 files.set("/data/assets/theme.txt", Buffer.from("theme test"));
 files.set("/data/assets/theme.mm", Buffer.from('<map version="1.0.1"><node TEXT="中心主题" ID="root"><node TEXT="子节点" ID="child" POSITION="right"/></node></map>'));
+files.set("/data/assets/tab-siblings.mm", Buffer.from('<map version="1.0.1" CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node TEXT="中心主题" ID="root"><node TEXT="上方" ID="upper" POSITION="right"><node TEXT="已有子节点" ID="upper-child"/></node><node TEXT="下方" ID="lower" POSITION="right"/></node></map>'));
 files.set("/data/assets/imported.mm", Buffer.from('<?xml version="1.0" encoding="UTF-8"?><map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="afafaf" COLOR="#ffffff" BACKGROUND_COLOR="#3f73f1"><font BOLD="true"/><node TEXT="q" ID="branch" STYLE="bubble" POSITION="right"><node TEXT="45646546" ID="nested" STYLE="fork"><node TEXT="输入文字" ID="leaf-a" STYLE="fork"/><node TEXT="556465465" ID="leaf-b" STYLE="fork"/><node TEXT="56asf4a54fa6" ID="leaf-c" STYLE="fork"/></node></node><node TEXT="13216541" ID="middle" STYLE="bubble" POSITION="right"/><node TEXT="456465161" ID="lower-a" STYLE="bubble" POSITION="right"/><node TEXT="456465465" ID="lower-b" STYLE="bubble" POSITION="right"/></node></map>'));
 files.set("/data/assets/mixed.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="2"><node ID="root" TEXT="两侧"><node ID="l1" TEXT="左一" POSITION="left"/><node ID="l2" TEXT="左二" POSITION="left"/><node ID="r1" TEXT="右一" POSITION="right"/><node ID="r2" TEXT="右二" POSITION="right"/></node></map>'));
 files.set("/data/assets/five.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="五条支路"><node ID="b1" TEXT="计划" POSITION="right"><node ID="c1" TEXT="下一步"/></node><node ID="b2" TEXT="设计" POSITION="right"><node ID="c2" TEXT="规范"/></node><node ID="b3" TEXT="开发" POSITION="right"><node ID="c3" TEXT="实现"/></node><node ID="b4" TEXT="测试" POSITION="right"><node ID="c4" TEXT="验收"/></node><node ID="b5" TEXT="发布" POSITION="right"><node ID="c5" TEXT="上线"/></node></node></map>'));
@@ -425,6 +426,27 @@ try {
   await evaluate("document.documentElement.setAttribute('data-theme-mode','light')");
   await until("getComputedStyle(document.querySelector('#map .map-container')).backgroundColor === 'rgb(255, 255, 255)'");
   checks.push("mind-map loads and changes canvas theme without altering node colors");
+  assert.match(await evaluate("document.querySelector('#help').textContent"), /按住右键拖动：移动画布/);
+  const fullscreenPoint = await evaluate(`(()=>{
+    const rect = document.querySelector('#fullscreen').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  await command("Input.dispatchMouseEvent", { type: "mousePressed", ...fullscreenPoint, button: "left", clickCount: 1 });
+  await command("Input.dispatchMouseEvent", { type: "mouseReleased", ...fullscreenPoint, button: "left", clickCount: 1 });
+  await until("document.fullscreenElement !== null");
+  await command("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await until("document.fullscreenElement === null");
+  await wait(120);
+  const exitCenter = await evaluate(`(()=>{
+    const root = document.querySelector('me-root > me-tpc').getBoundingClientRect();
+    const viewport = document.querySelector('#map .map-container').getBoundingClientRect();
+    return { dx: root.left + root.width / 2 - (viewport.left + viewport.width / 2),
+      dy: root.top + root.height / 2 - (viewport.top + viewport.height / 2) };
+  })()`);
+  assert.ok(Math.abs(exitCenter.dx) < 2 && Math.abs(exitCenter.dy) < 2,
+    `Esc after fullscreen left mind-map off center: ${JSON.stringify(exitCenter)}`);
+  checks.push("Esc exits mind-map fullscreen and restores the centered viewport");
   await navigate("mm-editor", "/assets/imported.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 9");
   const importedGeometry = await evaluate(`(()=>{
     const centerY = (element) => { const rect = element.getBoundingClientRect(); return rect.top + rect.height / 2; };
@@ -528,6 +550,29 @@ try {
   assert.equal(await evaluate("document.querySelector('#map').getBoundingClientRect().width"), 390);
   assert.equal(await evaluate("document.querySelectorAll('svg.lines > path').length"), 6);
   checks.push("mobile-width browser renders the imported mind map and its connectors");
+  await command("Emulation.setDeviceMetricsOverride", { width: 1100, height: 700, deviceScaleFactor: 1, mobile: false });
+  await navigate("mm-editor", "/assets/tab-siblings.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 4");
+  const childCenter = await evaluate(`(()=>{
+    const rect = [...document.querySelectorAll('me-tpc')].find((topic) => topic.nodeObj?.id === 'lower').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  await command("Input.dispatchMouseEvent", { type: "mousePressed", ...childCenter, button: "left", clickCount: 1 });
+  await command("Input.dispatchMouseEvent", { type: "mouseReleased", ...childCenter, button: "left", clickCount: 1 });
+  await evaluate("[...document.querySelectorAll('me-tpc')].find((topic) => topic.nodeObj?.id === 'lower').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true, cancelable: true }))");
+  await until("document.querySelector('#input-box') !== null");
+  await command("Input.insertText", { text: "新建的子节点" });
+  await wait(150);
+  const editingBranch = await evaluate(`(()=>{
+    const input = document.querySelector('#input-box');
+    const rect = input.getBoundingClientRect();
+    const parentTopic = [...document.querySelectorAll('me-tpc')].find((topic) => topic.nodeObj?.id === 'lower');
+    const parent = parentTopic.getBoundingClientRect();
+    const path = parentTopic.closest('me-wrapper').querySelector(':scope > svg.subLines > path');
+    return { parentY: parent.top + parent.height / 2, editorY: rect.top + rect.height / 2, d: path?.getAttribute('d') };
+  })()`);
+  assert.ok(Math.abs(editingBranch.parentY - editingBranch.editorY) < 0.25, "Tab editor is not centered on its parent branch");
+  assert.match(editingBranch.d, /^M [\d.-]+ [\d.-]+ H [\d.-]+$/, "Tab editor connector has an unwanted elbow");
+  checks.push("Tab-created mind node keeps a horizontal connector while editing");
   await evaluate("localStorage.clear()");
   await command("Page.navigate", { url: "about:blank" });
   await wait(150);

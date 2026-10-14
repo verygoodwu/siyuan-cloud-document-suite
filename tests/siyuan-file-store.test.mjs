@@ -616,7 +616,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /Math\.abs\(endRect\.top \+ endRect\.height \/ 2 - startRect\.top - startRect\.height \/ 2\) <= 0\.5/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
   assert.match(mindScript, /return `M \$\{parentEdge\} \$\{parentCenterY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm56/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm58/);
   assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);
@@ -649,7 +649,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /\^\(\?:新节点\|未命名主题\|new node\)\$/);
   assert.match(mindHtml, /stroke-linecap:round!important;stroke-linejoin:round!important/);
   assert.doesNotMatch(mindScript, /rightDragMoved|rightDragStart/);
-  assert.match(mindHtml, /Tab：子节点.*Enter：同级节点.*Ctrl\+\/：收起或展开.*\?：快捷键/);
+  assert.match(mindHtml, /按住右键拖动：移动画布.*Tab：子节点.*Enter：同级节点.*Ctrl\+\/：收起或展开/);
   assert.doesNotMatch(packageScript, /f\.button === 2/);
   assert.match(pluginSource, /buildUniqueUploadName\("新建脑图\.mm"\)/);
   assert.match(pluginSource, /asset\.originalName = "新建脑图\.mm"/);
@@ -868,7 +868,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(embedSource, /`\$\{this\.pluginVersion\}-board4`/);
   assert.match(embedSource, /`\$\{this\.pluginVersion\}-pdf2`/);
   assert.match(embedSource, /url\.searchParams\.set\("name", title\)/);
-  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm54`/);
+  assert.match(pluginSource, /const MM_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-mm56`/);
   assert.match(pluginSource, /const TEXT_EDITOR_CACHE_VERSION = `\$\{PLUGIN_VERSION\}-text15`/);
   assert.match(pluginSource, /pdf-reader\.html/);
   assert.match(pluginSource, /searchParams\.set\("v", editorVersion\)/);
