@@ -4,7 +4,10 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version,
 
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+
+    [ValidatePattern('^[a-fA-F0-9]{40}$')]
+    [string]$ExpectedRemoteHead
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,24 +40,15 @@ if (-not $currentNotes.Contains("# 云文档套件 v$Version")) {
 
 if (-not $VerifyOnly) {
     Invoke-Checked 'gh' @('auth', 'status')
-    Invoke-Checked 'git' @('fetch', 'origin', 'main', '--tags')
-    $branch = (& git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') {
-        throw 'Release from the main branch.'
-    }
-    $localHead = (& git rev-parse HEAD).Trim()
-    $remoteHead = (& git rev-parse origin/main).Trim()
-    if ($LASTEXITCODE -ne 0 -or $localHead -ne $remoteHead) {
-        throw 'Local main must match origin/main before tagging.'
+    if (-not $ExpectedRemoteHead) {
+        throw 'Supply -ExpectedRemoteHead with the reviewed remote main SHA from gh api.'
     }
     $changes = @(& git status --porcelain)
     if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
         throw 'Commit or remove working-tree changes before tagging.'
     }
     $tag = "v$Version"
-    $existingTag = @(& git ls-remote --tags origin "refs/tags/$tag")
-    if ($LASTEXITCODE -ne 0) { throw 'Could not check remote tags.' }
-    if ($existingTag.Count -ne 0) { throw "$tag already exists on origin." }
+    Invoke-Checked 'node' @('scripts/publish-github.mjs', '--version', $Version, '--expected-remote-head', $ExpectedRemoteHead, '--dry-run')
 }
 
 Invoke-Checked 'pnpm' @('install', '--frozen-lockfile')
@@ -87,9 +81,8 @@ $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
 Write-Host "Verified package.zip v$Version (SHA-256: $hash)"
 if ($VerifyOnly) { return }
 
-Invoke-Checked 'git' @('tag', '-a', $tag, '-m', "Release $tag")
-Invoke-Checked 'git' @('push', 'origin', $tag)
-Write-Host "Pushed $tag. GitHub Actions will build and attach package.zip."
+Invoke-Checked 'node' @('scripts/publish-github.mjs', '--version', $Version, '--expected-remote-head', $ExpectedRemoteHead)
+Write-Host "Created $tag through GitHub API. GitHub Actions will build and attach package.zip."
 
 $deadline = [DateTime]::UtcNow.AddMinutes(10)
 do {
