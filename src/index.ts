@@ -10,6 +10,7 @@ import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
 import { Diagnostics } from "./diagnostics";
 import { DragDropController } from "./drag-drop-controller";
+import { findEditorDropTarget } from "./drop-target";
 import { DocumentExportMenu } from "./document-export-menu";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
@@ -1003,9 +1004,7 @@ class DropImporterPlugin extends Plugin {
     const pointedElement = document.elementFromPoint(event.clientX, event.clientY);
     const editor = pointedElement?.closest(EDITOR_SELECTOR);
     if (editor) {
-      const block = pointedElement?.closest<HTMLElement>(BLOCK_SELECTOR);
-      const id = block?.dataset.nodeId;
-      return id ? { id, position: "after-block" } : null;
+      return findEditorDropTarget(pointedElement!);
     }
 
     return this.findTreeDropTarget(event);
@@ -1017,6 +1016,7 @@ class DropImporterPlugin extends Plugin {
       ...(event.target instanceof Element ? [event.target] : [])
     ];
     for (const candidate of candidates) {
+      if (!candidate.closest(FILE_TREE_SELECTOR)) continue;
       const treeItem =
         candidate.closest<HTMLElement>(TREE_DOCUMENT_SELECTOR) ??
         candidate.closest<HTMLElement>(

@@ -1,4 +1,5 @@
 import type { DropTarget } from "./types";
+import { isPdfFile } from "./file-types";
 
 interface DragDropHooks {
   isFileDrag(event: DragEvent): boolean;
@@ -91,7 +92,7 @@ export class DragDropController {
   };
 
   private readonly onDragEnter = (event: DragEvent): void => {
-    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event)) return;
+    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event) || this.isNativePdfEditorDrag(event)) return;
     this.dragDepth += 1; this.hooks.showOverlay();
   };
 
@@ -102,14 +103,14 @@ export class DragDropController {
   };
 
   private readonly onDragOver = (event: DragEvent): void => {
-    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event)) return;
+    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event) || this.isNativePdfEditorDrag(event)) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
   };
 
   private readonly onDrop = (event: DragEvent): void => {
     this.dragDepth = 0; this.hooks.removeOverlay();
-    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event)) return;
+    if (!this.hooks.isFileDrag(event) || !this.hooks.isSupportedPoint(event) || this.isNativePdfEditorDrag(event)) return;
     const files = Array.from(event.dataTransfer?.files ?? []);
     if (!files.length) return;
     const target = this.hooks.findDropTarget(event);
@@ -117,4 +118,13 @@ export class DragDropController {
     event.preventDefault(); event.stopImmediatePropagation();
     void this.hooks.importFiles(files, target);
   };
+
+  private isNativePdfEditorDrag(event: DragEvent): boolean {
+    if (this.hooks.findDropTarget(event)?.position !== "after-block") return false;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) return files.every((file) => isPdfFile(file.name));
+    // Browsers hide File objects until drop, but usually expose their MIME type.
+    const items = Array.from(event.dataTransfer?.items ?? []).filter((item) => item.kind === "file");
+    return items.length > 0 && items.every((item) => item.type.toLowerCase() === "application/pdf");
+  }
 }

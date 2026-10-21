@@ -90,13 +90,19 @@
       <label class="option switch-row"><span>合并子文档</span><input id="merge-subdocs" class="b3-switch" type="checkbox"></label>
       <label class="option switch-row"><span>导出 PDF 水印</span><input id="watermark" class="b3-switch" type="checkbox"></label>
       <label class="option switch-row"><span>分页</span><input id="paged" class="b3-switch" type="checkbox" checked></label>
+      <fieldset id="heading-page-breaks" class="option hidden">
+        <legend>指定标题另起一页</legend>
+        <span>首个内容块和连续标题由思源处理，避免空白页。</span>
+        <div><label><input type="checkbox" value="1">H1</label> <label><input type="checkbox" value="2">H2</label> <label><input type="checkbox" value="3">H3</label> <label><input type="checkbox" value="4">H4</label> <label><input type="checkbox" value="5">H5</label> <label><input type="checkbox" value="6">H6</label></div>
+      </fieldset>
     </div>
     <div id="status">正在生成预览…</div>
     <footer id="actions">
+      <button id="retry" class="b3-button b3-button--cancel hidden" type="button">重试预览</button>
       <button id="cancel" class="b3-button b3-button--cancel" type="button">取消</button>
       <button id="confirm" class="b3-button b3-button--text" type="button" disabled>确定</button>
     </footer>
   </aside>
-  <script src="/plugins/siyuan-cloud-document-suite/document-print.js?v=__PLUGIN_VERSION__-pdf-native1"></script>
+  <script src="/plugins/siyuan-cloud-document-suite/document-print.js?v=__PLUGIN_VERSION__-pdf-native2"></script>
 </body>
 </html>

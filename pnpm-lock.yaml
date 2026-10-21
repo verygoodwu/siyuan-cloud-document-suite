@@ -40,8 +40,8 @@ importers:
         specifier: ^4.4.3
         version: 4.5.0(webpack@5.109.2)
       siyuan:
-        specifier: 1.2.4
-        version: 1.2.4
+        specifier: 1.2.8
+        version: 1.2.8
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -61,14 +61,14 @@ packages:
     resolution: {integrity: sha512-Xc3VhU02wqZ1HvHRJUwL09HkZSTvidqY5Ya0NXBSYOxAp+Ln9dcJr9fySI+CkONzP3PekQo9WdzCv0PGER/mOA==}
     engines: {node: '>=14.17.0'}
 
-  '@dop251/types-goja_nodejs-buffer@0.0.0-20260212111938-1f56ff5bcf14':
-    resolution: {integrity: sha512-+ZEK3z3RVSE9O7Ml8HoeLtYSI/yR2ifa7Ppabfjq5fW06Kf00PcUz6hjz2we1h9CxlhiI7pLglEy4+hTUYGsQA==}
+  '@dop251/types-goja_nodejs-buffer@0.0.0-20260918183711-b481721df8a2':
+    resolution: {integrity: sha512-RWaDBwsOPEtZhajOiOiMRIQYvQKZdtq9XrDhc49upOs3lIb5E9hj7AK90nUI9kI9qULQ4lDVvI94joTlDkH1Lg==}
 
-  '@dop251/types-goja_nodejs-global@0.0.0-20260212111938-1f56ff5bcf14':
-    resolution: {integrity: sha512-NYnSveyts20w79Qp+Cs6a8vyrP3+8QVisseCU/2F0rMXK/WmLvbQYmyjNFMlDbY8g3HcooTIB/2AwcwonabQEg==}
+  '@dop251/types-goja_nodejs-global@0.0.0-20260918183711-b481721df8a2':
+    resolution: {integrity: sha512-nE+7cM9ncPqboXC6jJ60AJJghVfIwN1iXT2E8lgzLJ2LM8b6BjteDU49jq03XAl+8IJG8AuID/pt3D7w5zcCjg==}
 
-  '@dop251/types-goja_nodejs-url@0.0.0-20260212111938-1f56ff5bcf14':
-    resolution: {integrity: sha512-RyxfUr5u0WOO0dV2/BxV+zJ2QwUqnIoSwIoPQcGHakWp8elJ/nSU86pUB9gSO77e2XHWZYAZvNN5tXa9yOXJaA==}
+  '@dop251/types-goja_nodejs-url@0.0.0-20260918183711-b481721df8a2':
+    resolution: {integrity: sha512-o4k1jM2mA4lvmdPYYbDeslXQlfFb+ezk5T4HplpRW0lBTmABDIgBV/tbdXAhIkcEtL5jcQJ3Kgnw+N9E/WMFQw==}
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -742,8 +742,8 @@ packages:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
 
-  siyuan@1.2.4:
-    resolution: {integrity: sha512-L1QZcFp2zZxX7Qsjvmj/pqim1vBw9iEDeilEht51zxLf21csdYsuUV5U5NjUYfI/+1PUGeS/uJZGYwOwkfBHXw==}
+  siyuan@1.2.8:
+    resolution: {integrity: sha512-44tTh1leDkrgj8wQChLjkkbBvDk2lDF0QiAfs1GXmAlAEkber4kx5TLNIGzgsDnTR+Hw3L5kPz5m6s0YckpKew==}
 
   source-map-support@0.5.21:
     resolution: {integrity: sha512-uBHU3L3czsIyYXKX88fdrGovxdSCoTGDRZ6SYXtSRxLZUzHg5P/66Ht6uoUlHu9EZod+inXhKo3qQgwXUT/y1w==}
@@ -878,22 +878,22 @@ packages:
       webpack: ^4.0.0 || ^5.0.0
       webpack-sources: '*'
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
   '@discoveryjs/json-ext@1.1.0': {}
 
-  '@dop251/types-goja_nodejs-buffer@0.0.0-20260212111938-1f56ff5bcf14':
+  '@dop251/types-goja_nodejs-buffer@0.0.0-20260918183711-b481721df8a2':
     dependencies:
-      '@dop251/types-goja_nodejs-global': 0.0.0-20260212111938-1f56ff5bcf14
+      '@dop251/types-goja_nodejs-global': 0.0.0-20260918183711-b481721df8a2
 
-  '@dop251/types-goja_nodejs-global@0.0.0-20260212111938-1f56ff5bcf14': {}
+  '@dop251/types-goja_nodejs-global@0.0.0-20260918183711-b481721df8a2': {}
 
-  '@dop251/types-goja_nodejs-url@0.0.0-20260212111938-1f56ff5bcf14':
+  '@dop251/types-goja_nodejs-url@0.0.0-20260918183711-b481721df8a2':
     dependencies:
-      '@dop251/types-goja_nodejs-global': 0.0.0-20260212111938-1f56ff5bcf14
+      '@dop251/types-goja_nodejs-global': 0.0.0-20260918183711-b481721df8a2
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
@@ -1458,12 +1458,12 @@ snapshots:
 
   shebang-regex@3.0.0: {}
 
-  siyuan@1.2.4:
+  siyuan@1.2.8:
     dependencies:
-      '@dop251/types-goja_nodejs-buffer': 0.0.0-20260212111938-1f56ff5bcf14
-      '@dop251/types-goja_nodejs-global': 0.0.0-20260212111938-1f56ff5bcf14
-      '@dop251/types-goja_nodejs-url': 0.0.0-20260212111938-1f56ff5bcf14
-      zod: 4.4.3
+      '@dop251/types-goja_nodejs-buffer': 0.0.0-20260918183711-b481721df8a2
+      '@dop251/types-goja_nodejs-global': 0.0.0-20260918183711-b481721df8a2
+      '@dop251/types-goja_nodejs-url': 0.0.0-20260918183711-b481721df8a2
+      zod: 4.6.7
 
   source-map-support@0.5.21:
     dependencies:
@@ -1602,4 +1602,4 @@ snapshots:
       webpack-sources: 3.5.1
       yazl: 2.5.1
 
-  zod@4.4.3: {}
+  zod@4.6.7: {}

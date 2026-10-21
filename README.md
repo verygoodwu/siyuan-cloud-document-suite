@@ -18,11 +18,12 @@ Import, preview, create, edit, and export documents, real text files, spreadshee
 
 ![Feature preview](preview.png)
 
-## What's new in v2.3.2
+## v2.3.3 · Native PDF handling and export experience
 
-- Keeps the connector straight while editing a child mind-map node created with Tab.
-- Recenters the mind map after exiting fullscreen with Escape.
-- Explains right-drag canvas movement in the toolbar and shortcut dialog.
+- PDF-only drops into the editor pass through to SiYuan, preserving its PDF reader and annotations.
+- PDFs imported through the document tree or a mixed-file drop use normal asset links and SiYuan's attachment-opening preferences.
+- Existing browser PDF embeds are not rewritten automatically; reimport them after updating to use the new behavior.
+- Leaves database and readonly drops to SiYuan, routes remote-kernel PDF export to browser printing, and detects native heading-pagination support. See the [SiYuan 3.8.8 compatibility review](./docs/思源3.8.8兼容性检查.md).
 
 ## Release highlights by series
 
@@ -40,7 +41,7 @@ Development continues to focus on a lightweight, polished editing experience ins
 ## Features
 
 - Drag files from Windows Explorer onto a document or notebook in the document tree. The plugin uploads the source file and creates a same-named child document.
-- Lightweight PDF shell backed by Chromium's native viewer, with reload, original-file actions, print, fullscreen, and explicit missing/corrupt-file feedback without PDF.js.
+- PDFs use SiYuan's reader and attachment-opening preferences, preserving native annotation support. Existing browser PDF embeds remain readable.
 - Real editing for TXT, HTML, CSS, JavaScript, JSON, XML, YAML, logs, and common source/configuration text files, including autosave, recovery download, conflict protection, match navigation, replacement confirmation, status statistics, newline preservation, exact-extension export, and script-disabled split HTML preview.
 - Editable Excel workbooks with multiple sheets, add/delete/rename sheet actions, range copy/paste, row/column insertion, deletion and resizing, undo/redo, keyboard navigation, find/replace, common formula calculation, automatic SiYuan asset persistence, and `.xlsx` export.
 - `.docx` content conversion with the original attachment retained, plus lightweight SiYuan-block documents that export as Word or through a SiYuan-style PDF preview on desktop, with manual browser printing as a fallback.

@@ -5,6 +5,24 @@ import { resolve, extname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import * as XLSX from "xlsx";
+import { build } from "esbuild";
+import JSZip from "jszip";
+
+const dropTargetBundle = (await build({ entryPoints: ["src/drop-target.ts"], bundle: true, format: "iife", globalName: "CloudDrop", write: false })).outputFiles[0].text;
+const previewBundle = (await build({ entryPoints: ["src/preview-builders.ts"], bundle: true, platform: "browser", format: "iife", globalName: "CloudPreview", write: false })).outputFiles[0].text;
+const conversionFixtures = new Map();
+async function zipFixture(name, entries) {
+  const zip = new JSZip();
+  for (const [path, content] of Object.entries(entries)) zip.file(path, content);
+  conversionFixtures.set(`/fixtures/${name}`, await zip.generateAsync({ type: "nodebuffer" }));
+}
+await zipFixture("modern.xmind", { "content.json": JSON.stringify([{ title: "工作表", rootTopic: { title: "根主题", children: { attached: [{ title: "子主题" }] } } }]) });
+await zipFixture("legacy.xmind", { "content.xml": '<xmap-content xmlns="urn:xmind:xmap:xmlns:content:2.0"><sheet><title>旧工作表</title><topic><title>旧根主题</title><children><topics><topic><title>旧子主题</title></topic></topics></children></topic></sheet></xmap-content>' });
+await zipFixture("sample.docx", {
+  "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+  "_rels/.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+  "word/document.xml": '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>中文正文 &amp; 保留符号</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>名称</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>数值</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>42</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>'
+});
 
 // Isolated browser and in-memory kernel: never touches a user's workspace data.
 const files = new Map();
@@ -38,6 +56,31 @@ const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks);
+    if (conversionFixtures.has(url.pathname)) { res.end(conversionFixtures.get(url.pathname)); return; }
+    if (url.pathname === "/conversion-host") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end('<!doctype html><script src="/preview-builders-test.js"></script>'); return;
+    }
+    if (url.pathname === "/preview-builders-test.js") {
+      res.setHeader("Content-Type", "text/javascript; charset=utf-8"); res.end(previewBundle); return;
+    }
+    if (url.pathname === "/drop-target-test.js") {
+      res.setHeader("Content-Type", "text/javascript; charset=utf-8"); res.end(dropTargetBundle); return;
+    }
+    if (url.pathname === "/compatibility-host") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end('<!doctype html><div class="protyle"><div class="protyle-wysiwyg"><div data-node-id="ordinary" contenteditable="true"><span id="ordinary">text</span></div><div data-type="NodeAttributeView" data-node-id="database"><span id="database" contenteditable="true">asset cell</span></div><div data-type="NodeBlockQueryEmbed" data-node-id="query"><span id="query" contenteditable="true">embed</span></div><div data-node-id="iframe" contenteditable="false"><span id="noneditable">iframe</span></div></div></div><div class="protyle" data-readonly="true"><div class="protyle-wysiwyg"><div data-node-id="locked" contenteditable="true"><span id="locked">locked</span></div></div></div><div class="protyle-db-attr"><div class="protyle-wysiwyg"><div data-node-id="panel" contenteditable="true"><span id="panel">standalone database</span></div></div></div><script src="/drop-target-test.js"></script>'); return;
+    }
+    if (url.pathname === "/api/export/exportPreviewHTML") {
+      res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ code: 0, data: { name: "Preview", content: "<h1>Title</h1><p>Content</p><h2>Section</h2>" } })); return;
+    }
+    if (url.pathname === "/stage/protyle/js/protyle-html.js") {
+      res.setHeader("Content-Type", "text/javascript");
+      res.end('window.headingCalls=[];window.Protyle=location.search.includes("legacy=1")?{}:{applyExportHeadingPageBreaks:(root,levels,enabled)=>{window.headingCalls.push({levels,enabled});root.dataset.headingLevels=enabled?levels.join(","):""}};'); return;
+    }
+    if (url.pathname === "/stage/build/export/base.css" || url.pathname === "/appearance/themes/daylight/theme.css") {
+      res.setHeader("Content-Type", "text/css"); res.end(""); return;
+    }
     if (url.pathname === "/full-result") {
       fullResult = JSON.parse(body); res.end('{"code":0}'); return;
     }
@@ -139,6 +182,90 @@ try {
   await command("Runtime.enable"); await command("Page.enable");
   await command("Emulation.setFocusEmulationEnabled", { enabled: true });
   await command("Page.setDownloadBehavior", { behavior: "allow", downloadPath: profile });
+  await command("Page.navigate", { url: `${base}/compatibility-host` });
+  await until("typeof CloudDrop !== 'undefined'");
+  assert.deepEqual(await evaluate("['ordinary','database','query','noneditable','locked','panel'].map(id=>CloudDrop.findEditorDropTarget(document.getElementById(id)))"), [{ id: "ordinary", position: "after-block" }, null, null, null, null, null]);
+  checks.push("drop targeting leaves database assets, readonly editors and embedded blocks to SiYuan");
+  await command("Page.navigate", { url: `${base}/document-print.html?id=20261021000000-abcdefg` });
+  await until("!document.querySelector('#confirm').disabled");
+  assert.equal(await evaluate("document.querySelector('#heading-page-breaks').classList.contains('hidden')"), false);
+  await evaluate("document.querySelector('#heading-page-breaks input[value=\"2\"]').click()");
+  assert.deepEqual(await evaluate("window.headingCalls.at(-1)"), { levels: [2], enabled: true });
+  await click("#paged");
+  assert.deepEqual(await evaluate("window.headingCalls.at(-1)"), { levels: [2], enabled: false });
+  assert.equal(await evaluate("document.querySelector('#heading-page-breaks input').disabled"), true);
+  await command("Page.navigate", { url: `${base}/document-print.html?id=20261021000000-abcdefg&legacy=1` });
+  await until("!document.querySelector('#confirm').disabled");
+  assert.equal(await evaluate("document.querySelector('#heading-page-breaks').classList.contains('hidden')"), true);
+  checks.push("PDF heading pagination uses host capability detection and remains compatible with older hosts");
+  await evaluate(`window.previewRequests=[]; window.fetch=()=>new Promise((resolve,reject)=>window.previewRequests.push({resolve,reject}));
+    window.setPreviewTitle=(value)=>{const input=document.querySelector('#custom-title');input.value=value;input.dispatchEvent(new Event('input'))};
+    window.replyPreview=(index,text)=>previewRequests[index].resolve({ok:true,json:async()=>({code:0,data:{name:text,content:'<p>'+text+'</p>'}})});
+    setPreviewTitle('old')`);
+  assert.equal(await evaluate("document.querySelector('#confirm').disabled"), true);
+  await until("previewRequests.length===1");
+  await evaluate("setPreviewTitle('new')");
+  await until("previewRequests.length===2");
+  await evaluate("replyPreview(1,'new')");
+  await until("!document.querySelector('#confirm').disabled");
+  await evaluate("replyPreview(0,'old')");
+  assert.equal(await evaluate("document.querySelector('#preview').textContent"), "new");
+  await evaluate("setPreviewTitle('outdated failure')");
+  await until("previewRequests.length===3");
+  await evaluate("setPreviewTitle('latest')");
+  await until("previewRequests.length===4");
+  await evaluate("replyPreview(3,'latest');previewRequests[2].reject(new Error('outdated error'))");
+  await until("!document.querySelector('#confirm').disabled");
+  assert.equal(await evaluate("document.querySelector('#status').classList.contains('error')"), false);
+  await evaluate("setPreviewTitle('failure')");
+  await until("previewRequests.length===5");
+  await evaluate("previewRequests[4].reject(new Error('网络断开'))");
+  await until("!document.querySelector('#retry').classList.contains('hidden')");
+  assert.match(await evaluate("document.querySelector('#status').textContent"), /网络断开/);
+  await click("#retry");
+  await until("previewRequests.length===6");
+  await evaluate("replyPreview(5,'recovered')");
+  await until("!document.querySelector('#confirm').disabled");
+  await evaluate(`window.printCount=0;window.print=()=>printCount++;const img=document.createElement('img');img.id='pending-image';Object.defineProperty(img,'complete',{value:false});document.querySelector('#preview').append(img)`);
+  await click("#confirm");
+  assert.equal(await evaluate("printCount"), 0);
+  assert.equal(await evaluate("document.querySelector('#options').inert"), true);
+  await evaluate("document.querySelector('#pending-image').dispatchEvent(new Event('load'))");
+  await until("printCount===1 && !document.querySelector('#confirm').disabled");
+  checks.push("PDF preview ignores stale responses/errors, blocks stale export, retries failures and waits for print images");
+  await command("Page.navigate", { url: `${base}/document-print.html?id=20261021000000-abcdefg&parentWindowId=1` });
+  await until("!document.querySelector('#confirm').disabled");
+  await evaluate("window.require=()=>({ipcRenderer:{invoke:async()=>{throw new Error('目录选择失败')}}})");
+  await click("#confirm");
+  await until("document.querySelector('#status').textContent.includes('PDF 导出失败')");
+  assert.equal(await evaluate("document.querySelector('#confirm').disabled"), false);
+  await evaluate("window.sentExports=0;window.require=()=>({ipcRenderer:{invoke:async()=>({filePaths:['test-output']}),send:()=>sentExports++}})");
+  await click("#confirm");
+  await until("sentExports===1");
+  await click("#confirm");
+  assert.equal(await evaluate("sentExports"), 1);
+  checks.push("PDF export errors allow retry and native dispatch prevents duplicate exports");
+  await command("Page.navigate", { url: `${base}/conversion-host` });
+  await until("typeof CloudPreview !== 'undefined'");
+  const conversions = await evaluate(`(async()=>{
+    const builder=new CloudPreview.PreviewBuilders('test','test','test');
+    const asset=(name)=>({assetPath:'assets/'+name,originalName:name});
+    const read=async(name)=>(await fetch('/fixtures/'+name)).arrayBuffer();
+    let invalid='';try{builder.buildFreeMind(asset('bad.mm'),'<map><node TEXT="A & B"/></map>')}catch(error){invalid=error.message}
+    return {modern:await builder.buildXMind(asset('modern.xmind'),await read('modern.xmind')),
+      legacy:await builder.buildXMind(asset('legacy.xmind'),await read('legacy.xmind')),
+      word:await builder.buildWord(asset('sample.docx'),await read('sample.docx')),
+      mm:builder.buildFreeMind(asset('valid.mm'),'<map><node TEXT="A &amp; B"/></map>'),invalid};
+  })()`);
+  assert.match(conversions.modern, /工作表[\s\S]*根主题[\s\S]*子主题/);
+  assert.match(conversions.legacy, /旧工作表[\s\S]*旧根主题[\s\S]*旧子主题/);
+  assert.match(conversions.word, /中文正文 & 保留符号/);
+  assert.match(conversions.word, /\|.*名称.*\|.*数值.*\|/);
+  assert.match(conversions.word, /\|.*项目.*\|.*42.*\|/);
+  for (const type of ['modern','legacy','word']) assert.match(conversions[type], /### 附件[\s\S]*assets\//);
+  assert.match(conversions.mm, /mm-editor\.html/);
+  assert.match(conversions.invalid, /Invalid FreeMind/);
+  checks.push("Word text/tables, modern and legacy XMind, and escaped/invalid FreeMind XML exercise real browser parsers");
   await navigate("sheet-editor", "/assets/test.xlsx", "document.querySelectorAll('#grid td').length > 0");
   await evaluate("document.querySelector('#grid td').focus()");
   await command("Input.insertText", { text: "123" });

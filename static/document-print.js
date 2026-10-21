@@ -8,6 +8,7 @@ const previewElement = document.querySelector("#preview");
 const statusElement = document.querySelector("#status");
 const confirmButton = document.querySelector("#confirm");
 const cancelButton = document.querySelector("#cancel");
+const retryButton = document.querySelector("#retry");
 const pageSizeElement = document.querySelector("#page-size");
 const marginTypeElement = document.querySelector("#margin-type");
 const marginTopElement = document.querySelector("#margin-top");
@@ -26,6 +27,19 @@ const customTitlePanelElement = document.querySelector("#custom-title-panel");
 const mergeSubdocsElement = document.querySelector("#merge-subdocs");
 const watermarkElement = document.querySelector("#watermark");
 const pagedElement = document.querySelector("#paged");
+const headingPageBreaksElement = document.querySelector("#heading-page-breaks");
+
+function headingPageBreakLevels() {
+  return Array.from(headingPageBreaksElement.querySelectorAll("input:checked"), (input) => Number(input.value));
+}
+
+function updateHeadingPageBreaks() {
+  const apply = window.Protyle?.applyExportHeadingPageBreaks;
+  const supported = typeof apply === "function";
+  headingPageBreaksElement.classList.toggle("hidden", !supported || !pagedElement.checked);
+  for (const input of headingPageBreaksElement.querySelectorAll("input")) input.disabled = !supported || !pagedElement.checked;
+  if (supported) apply(previewElement, headingPageBreakLevels(), pagedElement.checked);
+}
 
 const PAGE_SIZES = {
   A3: { width: 11.7, height: 16.54 },
@@ -39,6 +53,9 @@ const PAGE_SIZES = {
 let rootTitle = requestedName;
 let refreshTimer;
 let titleComposing = false;
+let previewRevision = 0;
+let previewReady = false;
+let exporting = false;
 
 function ipcRenderer() {
   try {
@@ -114,40 +131,56 @@ function renderEnhancements() {
   }
 }
 
-async function requestPreview() {
-  if (!/^\d{14}-[a-z0-9]{7}$/.test(documentId)) throw new Error("文档 ID 无效");
-  setStatus("正在生成预览…");
+function invalidatePreview() {
+  previewRevision += 1;
+  previewReady = false;
   confirmButton.disabled = true;
-  const response = await fetch("/api/export/exportPreviewHTML", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: documentId,
-      keepFold: keepFoldElement.checked,
-      addTitle: addTitleElement.checked,
-      customTitle: customTitleElement.value,
-      merge: mergeSubdocsElement.checked,
-      mergeDocHeadingMode: "flat",
-      mergeContentHeadingMode: "preserve"
-    })
-  });
-  if (!response.ok) throw new Error(`思源接口返回 HTTP ${response.status}`);
-  const result = await response.json();
-  if (result.code !== 0) throw new Error(result.msg || "思源无法生成 PDF 预览");
-  rootTitle = (result.data?.name || requestedName).replace(/\.docx$/i, "") || "云文档";
-  document.title = `${rootTitle} - 导出 PDF`;
-  previewElement.innerHTML = result.data?.content || "";
-  if (result.data?.type) previewElement.dataset.docType = result.data.type;
-  for (const [key, value] of Object.entries(result.data?.attrs || {})) previewElement.setAttribute(key, String(value));
-  renderEnhancements();
-  applyPageLayout();
-  confirmButton.disabled = false;
-  setStatus(Number.isInteger(parentWindowId) && parentWindowId > 0 ? "预览已就绪" : "浏览器模式：确定后打开打印窗口");
+  retryButton.classList.add("hidden");
+  setStatus("正在生成预览…");
+}
+
+async function requestPreview() {
+  invalidatePreview();
+  const revision = previewRevision;
+  try {
+    if (!/^\d{14}-[a-z0-9]{7}$/.test(documentId)) throw new Error("文档 ID 无效");
+    const response = await fetch("/api/export/exportPreviewHTML", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: documentId,
+        keepFold: keepFoldElement.checked,
+        addTitle: addTitleElement.checked,
+        customTitle: customTitleElement.value,
+        merge: mergeSubdocsElement.checked,
+        mergeDocHeadingMode: "flat",
+        mergeContentHeadingMode: "preserve"
+      })
+    });
+    if (!response.ok) throw new Error(`思源接口返回 HTTP ${response.status}`);
+    const result = await response.json();
+    if (revision !== previewRevision) return;
+    if (result.code !== 0) throw new Error(result.msg || "思源无法生成 PDF 预览");
+    rootTitle = (result.data?.name || requestedName).replace(/\.docx$/i, "") || "云文档";
+    document.title = `${rootTitle} - 导出 PDF`;
+    previewElement.innerHTML = result.data?.content || "";
+    if (result.data?.type) previewElement.dataset.docType = result.data.type;
+    for (const [key, value] of Object.entries(result.data?.attrs || {})) previewElement.setAttribute(key, String(value));
+    renderEnhancements();
+    updateHeadingPageBreaks();
+    applyPageLayout();
+    previewReady = true;
+    confirmButton.disabled = exporting;
+    setStatus(Number.isInteger(parentWindowId) && parentWindowId > 0 ? "预览已就绪" : "浏览器模式：确定后打开打印窗口");
+  } catch (error) {
+    if (revision === previewRevision) fail(error);
+  }
 }
 
 function schedulePreview() {
+  invalidatePreview();
   window.clearTimeout(refreshTimer);
-  refreshTimer = window.setTimeout(() => void requestPreview().catch(fail), 260);
+  refreshTimer = window.setTimeout(() => void requestPreview(), 260);
 }
 
 function waitForImages() {
@@ -179,59 +212,84 @@ function unpagedPageSize() {
 }
 
 async function exportPdf() {
-  const ipc = ipcRenderer();
-  if (!ipc || !Number.isInteger(parentWindowId) || parentWindowId <= 0) {
-    window.print();
-    return;
-  }
+  if (!previewReady || exporting || titleComposing) return;
+  exporting = true;
   confirmButton.disabled = true;
-  const result = await ipc.invoke("siyuan-get", {
-    cmd: "showOpenDialog",
-    title: "导出 PDF",
-    properties: ["createDirectory", "openDirectory"]
-  });
-  if (result?.canceled || !result?.filePaths?.length) {
-    confirmButton.disabled = false;
-    return;
+  document.querySelector("#options").inert = true;
+  const revision = previewRevision;
+  let dispatched = false;
+  try {
+    updateHeadingPageBreaks();
+    const ipc = ipcRenderer();
+    if (!ipc || !Number.isInteger(parentWindowId) || parentWindowId <= 0) {
+      setStatus("正在准备图片和字体…");
+      await Promise.all([waitForImages(), document.fonts?.ready || Promise.resolve()]);
+      if (revision !== previewRevision) return;
+      window.print();
+      setStatus("打印窗口已关闭，可继续调整或再次导出");
+      return;
+    }
+    confirmButton.disabled = true;
+    const result = await ipc.invoke("siyuan-get", {
+      cmd: "showOpenDialog",
+      title: "导出 PDF",
+      properties: ["createDirectory", "openDirectory"]
+    });
+    if (result?.canceled || !result?.filePaths?.length) {
+      confirmButton.disabled = false;
+      return;
+    }
+    setStatus("正在导出 PDF…");
+    await Promise.all([waitForImages(), document.fonts?.ready || Promise.resolve()]);
+    if (revision !== previewRevision) return;
+    const pageSize = pageSizeElement.value;
+    const margins = marginValues();
+    const customPageSize = unpagedPageSize();
+    document.body.classList.add("exporting");
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    ipc.send("siyuan-export-pdf", {
+      title: "导出 PDF",
+      pdfOptions: {
+        printBackground: true,
+        landscape: landscapeElement.checked,
+        marginType: marginTypeElement.value,
+        margins,
+        scale: Number.parseFloat(scaleElement.value),
+        pageSize: customPageSize || pageSize
+      },
+      pageSize,
+      keepFold: keepFoldElement.checked,
+      addTitle: addTitleElement.checked,
+      customTitle: customTitleElement.value,
+      mergeSubdocs: mergeSubdocsElement.checked,
+      mergeDocHeadingMode: "flat",
+      mergeContentHeadingMode: "preserve",
+      watermark: watermarkElement.checked,
+      removeAssets: embedAssetsElement.checked,
+      paged: pagedElement.checked,
+      headingPageBreakLevels: headingPageBreakLevels(),
+      rootId: documentId,
+      rootTitle,
+      parentWindowId,
+      filePaths: result.filePaths
+    });
+    dispatched = true;
+  } catch (error) {
+    document.body.classList.remove("exporting");
+    setStatus(`PDF 导出失败：${error instanceof Error ? error.message : String(error)}，可重试`, true);
+  } finally {
+    exporting = dispatched;
+    document.querySelector("#options").inert = dispatched;
+    confirmButton.disabled = dispatched || !previewReady;
   }
-  setStatus("正在导出 PDF…");
-  await Promise.all([waitForImages(), document.fonts?.ready || Promise.resolve()]);
-  const pageSize = pageSizeElement.value;
-  const margins = marginValues();
-  const customPageSize = unpagedPageSize();
-  document.body.classList.add("exporting");
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  ipc.send("siyuan-export-pdf", {
-    title: "导出 PDF",
-    pdfOptions: {
-      printBackground: true,
-      landscape: landscapeElement.checked,
-      marginType: marginTypeElement.value,
-      margins,
-      scale: Number.parseFloat(scaleElement.value),
-      pageSize: customPageSize || pageSize
-    },
-    pageSize,
-    keepFold: keepFoldElement.checked,
-    addTitle: addTitleElement.checked,
-    customTitle: customTitleElement.value,
-    mergeSubdocs: mergeSubdocsElement.checked,
-    mergeDocHeadingMode: "flat",
-    mergeContentHeadingMode: "preserve",
-    watermark: watermarkElement.checked,
-    removeAssets: embedAssetsElement.checked,
-    paged: pagedElement.checked,
-    rootId: documentId,
-    rootTitle,
-    parentWindowId,
-    filePaths: result.filePaths
-  });
 }
 
 function fail(error) {
   console.error("[Cloud Document Suite] PDF preview failed", error);
   setStatus(`PDF 预览失败：${error instanceof Error ? error.message : String(error)}`, true);
   confirmButton.disabled = true;
+  previewReady = false;
+  retryButton.classList.remove("hidden");
 }
 
 pageSizeElement.addEventListener("change", applyPageLayout);
@@ -248,12 +306,15 @@ landscapeElement.addEventListener("change", () => {
 });
 keepFoldElement.addEventListener("change", schedulePreview);
 mergeSubdocsElement.addEventListener("change", schedulePreview);
+headingPageBreaksElement.addEventListener("change", updateHeadingPageBreaks);
+pagedElement.addEventListener("change", updateHeadingPageBreaks);
 addTitleElement.addEventListener("change", () => {
   customTitlePanelElement.classList.toggle("hidden", !addTitleElement.checked);
   schedulePreview();
 });
 customTitleElement.addEventListener("compositionstart", () => {
   titleComposing = true;
+  invalidatePreview();
   window.clearTimeout(refreshTimer);
 });
 customTitleElement.addEventListener("compositionend", () => {
@@ -264,7 +325,8 @@ customTitleElement.addEventListener("input", () => {
   if (!titleComposing) schedulePreview();
 });
 cancelButton.addEventListener("click", closeWindow);
-confirmButton.addEventListener("click", () => void exportPdf().catch(fail));
+confirmButton.addEventListener("click", () => void exportPdf());
+retryButton.addEventListener("click", () => void requestPreview());
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -274,4 +336,4 @@ window.addEventListener("keydown", (event) => {
 
 setPresetMargins();
 applyPageLayout();
-void requestPreview().catch(fail);
+void requestPreview();

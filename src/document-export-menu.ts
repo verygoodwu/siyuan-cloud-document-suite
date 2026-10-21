@@ -347,11 +347,20 @@ export class DocumentExportMenu {
     previewUrl.searchParams.set("id", info.documentId);
     previewUrl.searchParams.set("name", info.originalName || "云文档");
 
-    if (!ipcRenderer) {
+    let remoteKernel = new URLSearchParams(location.search).get("remote") === "1";
+    if (ipcRenderer) {
+      try {
+        const connection = await ipcRenderer.invoke<{ kernelMode?: string } | undefined>("siyuan-get", { cmd: "kernelConnection" });
+        if (connection?.kernelMode) remoteKernel = connection.kernelMode === "remote";
+      } catch {
+        // Older hosts do not expose kernelConnection; retain their local path.
+      }
+    }
+    if (!ipcRenderer || remoteKernel) {
       const fallback = window.open(previewUrl.href, "_blank");
       if (!fallback) throw new Error("当前环境无法打开 PDF 预览窗口");
       fallback.opener = null;
-      this.showToast("当前为浏览器环境，已打开打印预览；桌面端使用思源 PDF 导出面板");
+      this.showToast(remoteKernel ? "当前连接远程内核，已打开浏览器打印预览" : "当前为浏览器环境，已打开打印预览；桌面端使用思源 PDF 导出面板");
       return;
     }
 

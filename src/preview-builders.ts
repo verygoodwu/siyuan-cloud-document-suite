@@ -68,8 +68,9 @@ export class PreviewBuilders {
   }
 
   buildPdf(asset: UploadedAsset): string {
-    const url = `/plugins/siyuan-cloud-document-suite/pdf-reader.html?v=${encodeURIComponent(this.pluginVersion)}-pdf2&asset=${encodeURIComponent(`/${asset.assetPath}`)}&name=${encodeURIComponent(asset.originalName)}`;
-    return `<iframe src="${escapeHtml(url)}" data-src="${escapeHtml(url)}" style="${EMBED_STYLE} height: clamp(520px, calc(100vh - 180px), 780px); min-height: 520px;" frameborder="0" allow="fullscreen" allowfullscreen></iframe>`;
+    // A normal asset link is routed through SiYuan's PDF reader, preserving
+    // annotations and the user's attachment-opening preferences.
+    return buildAttachmentMarkdown([asset]);
   }
 
   private convertXMindJson(value: unknown): string {

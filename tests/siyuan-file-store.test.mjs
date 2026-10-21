@@ -700,7 +700,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(documentExportSource, /cmd: "getContentsId"/);
   assert.match(documentExportSource, /ipcRenderer\.send\("siyuan-export-newwindow", previewUrl\.href\)/);
   assert.doesNotMatch(documentExportSource, /document\.body\.append\(frame\)/);
-  assert.match(documentPrintHtml, /document-print\.js\?v=__PLUGIN_VERSION__-pdf-native1/);
+  assert.match(documentPrintHtml, /document-print\.js\?v=__PLUGIN_VERSION__-pdf-native2/);
   assert.match(documentPrintHtml, /id="page-size"/);
   assert.match(documentPrintHtml, /id="margin-type"/);
   assert.match(documentPrintHtml, /id="landscape"/);
@@ -720,7 +720,6 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(packageScript, /static\/pdf-reader\.js/);
   assert.match(packageScript, /static\/pdf-reader-core\.js/);
   assert.match(previewSource, /text-editor\.html/);
-  assert.match(previewSource, /pdf-reader\.html/);
   assert.match(previewSource, /allow="fullscreen" allowfullscreen/);
   assert.match(fileTypesSource, /EDITABLE_TEXT_EXTENSIONS/);
   assert.match(fileTypesSource, /"txt".*"html".*"htm".*"css".*"js"/s);

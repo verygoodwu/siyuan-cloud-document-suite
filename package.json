@@ -1,6 +1,6 @@
 {
   "name": "siyuan-cloud-document-suite",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "private": true,
   "description": "Cloud Document Suite for documents, text files, spreadsheets, mind maps, and editable whiteboards in SiYuan.",
   "packageManager": "pnpm@11.19.0",
@@ -28,7 +28,7 @@
     "copy-webpack-plugin": "^14.0.0",
     "esbuild": "0.28.2",
     "esbuild-loader": "^4.4.3",
-    "siyuan": "1.2.4",
+    "siyuan": "1.2.8",
     "typescript": "^6.0.3",
     "webpack": "^5.107.2",
     "webpack-cli": "^7.0.3",
