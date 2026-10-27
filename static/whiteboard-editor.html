@@ -20,6 +20,9 @@
     #empty-tip{position:absolute;z-index:5;left:50%;top:50%;display:flex;flex-direction:column;align-items:center;gap:7px;color:var(--board-muted);transform:translate(-50%,-50%);pointer-events:none}#empty-tip[hidden]{display:none}#empty-tip strong{color:var(--board-text);font-size:16px}.loading{position:absolute;z-index:50;inset:0;display:grid;place-items:center;background:var(--board-bg);color:var(--board-muted)}.loading[hidden]{display:none}
     @media(max-width:700px){#main-toolbar{top:auto;bottom:10px;left:50%;flex-direction:row;transform:translateX(-50%)}#zoom-toolbar{display:none}#help-button{display:none}#top-actions{right:8px;top:8px}.board-file-name{max-width:90px}.save-status{max-width:96px}#board-search{top:56px;right:8px}#board-search-input{width:min(190px,42vw)}.tool-menu{top:auto;bottom:43px;left:0}#selection-toolbar{max-width:calc(100% - 16px);overflow-x:auto}}
   </style>
+  <style>
+    .whiteboard-connector.selected .connector-line{stroke:var(--board-accent);stroke-width:3}
+  </style>
 </head>
 <body>
   <main id="app">
@@ -104,3 +107,4 @@
   <script type="module" src="./whiteboard-editor.js?v=__PLUGIN_VERSION__-board5"></script>
 </body>
 </html>
+

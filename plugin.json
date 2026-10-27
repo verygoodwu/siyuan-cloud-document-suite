@@ -2,7 +2,7 @@
   "name": "siyuan-cloud-document-suite",
   "author": "verygoodwu",
   "url": "https://github.com/verygoodwu/siyuan-cloud-document-suite",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "minAppVersion": "3.7.4",
   "kernels": ["windows", "linux", "docker", "darwin"],
   "backends": ["windows", "linux", "docker", "darwin"],
@@ -22,3 +22,4 @@
   },
   "keywords": ["document", "text", "html", "office", "excel", "word", "pdf", "mindmap", "whiteboard", "云文档", "办公套件", "文本编辑器", "白板", "拖放"]
 }
+

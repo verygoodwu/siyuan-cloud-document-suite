@@ -1,5 +1,7 @@
 # Cloud Document Suite
 
+> v2.3.4 improves whiteboard text editing and connections: double-click to place the caret, Enter/F2 to edit at the end, drag quick-create handles onto existing shapes to connect, and select connectors without a rectangular selection box.
+
 **English** | [简体中文](./README.zh-CN.md)
 
 ## Quick start · One minute
@@ -81,3 +83,4 @@ Cloud Document Suite is under active development. I am gradually adding more fea
 ## License
 
 [MIT](LICENSE)
+

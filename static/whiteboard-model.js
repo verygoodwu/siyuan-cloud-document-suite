@@ -370,24 +370,113 @@ export function endpointPosition(document, endpoint, opposite) {
   return { x: bounds.right, y: bounds.y + bounds.height / 2 };
 }
 
-export function connectorPath(document, connector) {
+function connectorGeometry(document, connector) {
   const rawFrom = endpointPosition(document, connector.from);
   const rawTo = endpointPosition(document, connector.to, rawFrom);
   const from = endpointPosition(document, connector.from, rawTo);
   const to = endpointPosition(document, connector.to, from);
+  const vectors = { top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 } };
+  const direction = (endpoint, start, end) => vectors[endpoint?.anchor] || (
+    Math.abs(end.x - start.x) >= Math.abs(end.y - start.y)
+      ? { x: end.x >= start.x ? 1 : -1, y: 0 }
+      : { x: 0, y: end.y >= start.y ? 1 : -1 }
+  );
+  return { from, to, fromDirection: direction(connector.from, from, to), toDirection: direction(connector.to, to, from) };
+}
+
+function simplifyConnectorPoints(points) {
+  const result = [];
+  for (const point of points) {
+    if (result.at(-1)?.x === point.x && result.at(-1)?.y === point.y) continue;
+    const a = result.at(-2);
+    const b = result.at(-1);
+    if (a && ((a.x === b.x && b.x === point.x && (b.y - a.y) * (point.y - b.y) >= 0)
+      || (a.y === b.y && b.y === point.y && (b.x - a.x) * (point.x - b.x) >= 0))) result.pop();
+    result.push(point);
+  }
+  return result;
+}
+
+// Route around the two attached shapes, respecting their outward connection sides.
+// This intentionally does not route around unrelated shapes elsewhere on the board.
+export function connectorPoints(document, connector) {
+  const { from, to, fromDirection, toDirection } = connectorGeometry(document, connector);
+  const gap = Math.min(24, Math.max(8, (Math.abs(to.x - from.x) + Math.abs(to.y - from.y)) / 4));
+  const a = { x: from.x + fromDirection.x * gap, y: from.y + fromDirection.y * gap };
+  const b = { x: to.x + toDirection.x * gap, y: to.y + toDirection.y * gap };
+  const attachedIds = new Set([connector.from?.nodeId, connector.to?.nodeId].filter(Boolean));
+  const obstacles = document.nodes.filter((node) => attachedIds.has(node.id)).map(nodeBounds);
+  const xs = [...new Set([(a.x + b.x) / 2, a.x, b.x, ...obstacles.flatMap((r) => [r.x - gap, r.right + gap])])];
+  const ys = [...new Set([(a.y + b.y) / 2, a.y, b.y, ...obstacles.flatMap((r) => [r.y - gap, r.bottom + gap])])];
+  const routes = [
+    ...xs.map((x) => [a, { x, y: a.y }, { x, y: b.y }, b]),
+    ...ys.map((y) => [a, { x: a.x, y }, { x: b.x, y }, b]),
+    [a, { x: b.x, y: a.y }, b],
+    [a, { x: a.x, y: b.y }, b]
+  ];
+  const crosses = (p, q, r) => p.x === q.x
+    ? p.x > r.x && p.x < r.right && Math.max(p.y, q.y) > r.y && Math.min(p.y, q.y) < r.bottom
+    : p.y > r.y && p.y < r.bottom && Math.max(p.x, q.x) > r.x && Math.min(p.x, q.x) < r.right;
+  let best = null;
+  let bestScore = Infinity;
+  let expanded = false;
+  for (let routeIndex = 0; routeIndex < routes.length; routeIndex += 1) {
+    const route = routes[routeIndex];
+    const points = simplifyConnectorPoints([from, ...route, to]);
+    let score = (points.length - 2) * 12;
+    for (let i = 1; i < points.length; i += 1) {
+      const p = points[i - 1], q = points[i];
+      score += Math.abs(q.x - p.x) + Math.abs(q.y - p.y);
+      for (const obstacle of obstacles) if (crosses(p, q, obstacle)) score += 1000000;
+      if (i > 1) {
+        const before = points[i - 2];
+        if ((p.x - before.x) * (q.x - p.x) + (p.y - before.y) * (q.y - p.y) < 0) score += 1000000;
+      }
+    }
+    if (score < bestScore) { bestScore = score; best = points; }
+    // Only search extra bends if the simpler candidates cannot avoid the attached shapes.
+    if (routeIndex === routes.length - 1 && bestScore >= 1000000 && !expanded) {
+      expanded = true;
+      for (const x of xs) for (const y of ys) {
+        routes.push([a, { x, y: a.y }, { x, y }, { x: b.x, y }, b]);
+        routes.push([a, { x: a.x, y }, { x, y }, { x, y: b.y }, b]);
+      }
+    }
+  }
+  return best || [from, to];
+}
+
+export function connectorLabelPosition(document, connector) {
+  if (connector.lineShape !== "rightAngle") {
+    const { from, to, fromDirection, toDirection } = connectorGeometry(document, connector);
+    if (connector.lineShape === "curve") {
+      const distance = Math.max(48, Math.min(240, (Math.abs(to.x - from.x) + Math.abs(to.y - from.y)) * 0.45));
+      return { x: (from.x + to.x) / 2 + (fromDirection.x + toDirection.x) * distance * 0.375,
+        y: (from.y + to.y) / 2 + (fromDirection.y + toDirection.y) * distance * 0.375 };
+    }
+    return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  }
+  const points = connectorPoints(document, connector);
+  const lengths = points.slice(1).map((p, i) => Math.hypot(p.x - points[i].x, p.y - points[i].y));
+  let remaining = lengths.reduce((sum, length) => sum + length, 0) / 2;
+  for (let i = 0; i < lengths.length; i += 1) {
+    if (remaining <= lengths[i] && lengths[i]) {
+      const ratio = remaining / lengths[i];
+      return { x: points[i].x + (points[i + 1].x - points[i].x) * ratio, y: points[i].y + (points[i + 1].y - points[i].y) * ratio };
+    }
+    remaining -= lengths[i];
+  }
+  return points[0];
+}
+
+export function connectorPath(document, connector) {
+  const { from, to, fromDirection, toDirection } = connectorGeometry(document, connector);
   if (connector.lineShape === "straight") return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
   if (connector.lineShape === "curve") {
-    const distance = Math.max(48, Math.abs(to.x - from.x) * 0.45);
-    const direction = to.x >= from.x ? 1 : -1;
-    return `M ${from.x} ${from.y} C ${from.x + distance * direction} ${from.y}, ${to.x - distance * direction} ${to.y}, ${to.x} ${to.y}`;
+    const distance = Math.max(48, Math.min(240, (Math.abs(to.x - from.x) + Math.abs(to.y - from.y)) * 0.45));
+    return `M ${from.x} ${from.y} C ${from.x + distance * fromDirection.x} ${from.y + distance * fromDirection.y}, ${to.x + distance * toDirection.x} ${to.y + distance * toDirection.y}, ${to.x} ${to.y}`;
   }
-  const horizontal = Math.abs(to.x - from.x) >= Math.abs(to.y - from.y);
-  if (horizontal) {
-    const middle = (from.x + to.x) / 2;
-    return `M ${from.x} ${from.y} H ${middle} V ${to.y} H ${to.x}`;
-  }
-  const middle = (from.y + to.y) / 2;
-  return `M ${from.x} ${from.y} V ${middle} H ${to.x} V ${to.y}`;
+  return connectorPoints(document, connector).map((point, i) => `${i ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
 }
 
 export function freehandPath(points = []) {
@@ -410,3 +499,4 @@ export function anchorForDirection(direction) {
 export function oppositeAnchor(anchor) {
   return { top: "bottom", right: "left", bottom: "top", left: "right" }[anchor] || "left";
 }
+

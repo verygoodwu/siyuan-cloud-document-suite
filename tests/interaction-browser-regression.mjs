@@ -364,12 +364,12 @@ try {
   await key("Enter", { ctrlKey: true });
   await evaluate("document.querySelector('#canvas-shell').focus()");
   await key("1");
-  assert.equal(await evaluate("document.querySelector('#text-editor-input').textContent"), "1");
+  assert.equal(await evaluate("document.querySelector('#text-editor-input').textContent"), "old1");
   await key("Escape", { isComposing: true });
   assert.equal(await evaluate("document.querySelector('#text-editor').hidden"), false);
   await key("Enter", { ctrlKey: true });
   await evaluate("document.querySelector('#canvas-shell').focus()");
-  checks.push("selected-node digit input and IME Escape priority");
+  checks.push("selected-node digit input appends without losing existing text; IME Escape priority");
   const geometry = await evaluate("document.querySelector('#node-layer').innerHTML");
   await command("Input.dispatchMouseEvent", { type: "mousePressed", x: 500, y: 300, button: "left", clickCount: 1 });
   await command("Input.dispatchMouseEvent", { type: "mouseMoved", x: 580, y: 350, button: "left", buttons: 1 });
@@ -716,3 +716,4 @@ try {
 } finally {
   socket?.close(); browser.kill(); server.close();
 }
+

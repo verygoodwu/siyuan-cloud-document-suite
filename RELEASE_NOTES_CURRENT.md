@@ -1,23 +1,23 @@
-# 云文档套件 v2.3.3
+# 云文档套件 v2.3.4
 
-- PDF 导出预览防止旧请求覆盖，设置更新期间暂停导出；失败可重试，打印前等待图片与字体，并避免重复提交。
+- 修复白板节点按下即捕获鼠标，干扰双击进入编辑的问题；现在双击保留原文，并按点击位置放置光标。
+- Enter/F2 从末尾编辑，选中节点后直接输入改为追加；支持局部修改、换行和取消编辑。
+- 四向连接点拖到已有节点时直接连接，拖到空白处仍可创建节点，增加目标高亮和端点吸附提示。
+- 改善折线和曲线的出入方向、连线说明位置；释放鼠标时重新判断连接目标，缩放后控制点保持可操作大小。
+- 选中连线时取消矩形包围框，只高亮线条并显示两端重连圆点；普通图形保留原选择框。
+- 保留已有白板格式、自动保存、恢复及冲突保护。连线仅对相连的两个节点做局部避让，不提供全画布避障或重复连线合并。
 
-- 修复插件接管 PDF 拖放后使用浏览器预览，导致无法使用思源批注功能的问题。
-- 正文中仅拖入 PDF 时保留思源原生拖放行为；文档树和混合导入中的 PDF 使用标准附件链接。
-- 旧版浏览器 PDF 嵌入保留兼容，不自动改写已有文档；可在更新后重新导入。
-- 拖放避让数据库附件、只读区域和查询嵌入，文档树识别限定在实际文件树内。
-- 修复桌面连接远程内核时 PDF 导出无响应，改为浏览器打印预览。
-- 支持思源 3.8.8 的标题分页能力，并兼容旧版缺少该能力的情况；开发 SDK 同步至官方示例使用的 1.2.8。
+验证：95 项自动测试、TypeScript 检查、生产构建、白板专项浏览器回归通过；修复测试版已在 Windows 思源 3.8.2 中安装并核验插件文件。系统实体输入法候选窗、Mac/Linux 及跨设备同步未完成本次实机回归。
 
 ---
 
-# Cloud Document Suite v2.3.3
+# Cloud Document Suite v2.3.4
 
-- Prevents stale PDF previews and duplicate exports, adds preview retry, and waits for images and fonts before browser printing.
+- Fixes pointer capture interfering with double-click editing. Existing text is preserved and the caret follows the clicked position.
+- Enter/F2 edits at the end; typing on a selected node appends instead of replacing the whole label.
+- Drag quick-create handles onto existing shapes to connect, or onto empty space to create a connected shape, with target and endpoint feedback.
+- Improves side-aware orthogonal/curved routing, connector label placement, drop targeting and zoom-stable connection handles.
+- Selecting a connector highlights its path and shows endpoint handles without a rectangular selection box.
+- Preserves the existing document format and save/recovery/conflict protections. Routing only avoids the two attached nodes; duplicate links remain separate.
 
-- Preserves SiYuan's native PDF drop handling and annotation reader for PDF-only editor drops.
-- Uses normal PDF asset links for document-tree and mixed-file imports.
-- Keeps legacy browser PDF embeds readable; existing documents are not automatically rewritten.
-- Leaves database assets, readonly areas, and embedded queries to SiYuan's native handling.
-- Routes remote-kernel PDF exports to browser print preview and detects host heading-page-break support.
-- Aligns the development SDK with the official sample's 1.2.8 declaration.
+Validation includes automated tests, type checking, production build and isolated whiteboard browser regressions. The preview was installed and file-verified in Windows SiYuan 3.8.2. Native IME candidate windows, Mac/Linux and cross-device sync were not fully tested in this release.

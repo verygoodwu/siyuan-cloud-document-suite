@@ -98,7 +98,7 @@ try {
   await selectNode(rectId);
   win.dispatchEvent(new KeyboardEvent("keydown", { key: "直", bubbles: true }));
   await wait(30);
-  assert(textEditorInput().textContent === "直", "direct typing did not replace text");
+  assert(textEditorInput().textContent === "再次编辑直", "direct typing did not preserve and append to existing text");
   await commitText("直接输入");
   win.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await wait(20);
@@ -435,3 +435,4 @@ try {
   await fetch("/full-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "failed", checks, error: String(error.stack || error) }) });
 }
 </script></body></html>
+

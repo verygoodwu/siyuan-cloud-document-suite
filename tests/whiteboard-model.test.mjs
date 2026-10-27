@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   WHITEBOARD_NODE_LIMIT,
   connectorPath,
+  connectorPoints,
+  endpointPosition,
   createWhiteboardDocument,
   createWhiteboardNode,
   detachWhiteboardReferences,
@@ -60,9 +62,39 @@ test("whiteboard documents round-trip as versioned editable node data", () => {
 
 test("connector geometry follows node anchors after nodes move", () => {
   const documentValue = sampleBoard();
-  assert.equal(connectorPath(documentValue, documentValue.nodes[1]), "M 180 70 H 250 V 90 H 320");
+  assert.deepEqual(connectorPoints(documentValue, documentValue.nodes[1]).at(0), { x: 180, y: 70 });
+  assert.deepEqual(connectorPoints(documentValue, documentValue.nodes[1]).at(-1), { x: 320, y: 90 });
   moveWhiteboardNodes(documentValue, ["end"], 100, 40);
-  assert.equal(connectorPath(documentValue, documentValue.nodes[1]), "M 180 70 H 300 V 130 H 420");
+  assert.deepEqual(connectorPoints(documentValue, documentValue.nodes[1]).at(0), { x: 180, y: 70 });
+  assert.deepEqual(connectorPoints(documentValue, documentValue.nodes[1]).at(-1), { x: 420, y: 130 });
+});
+
+test("all connection sides leave shapes outwards and avoid both attached rectangles", () => {
+  const vectors = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
+  for (const [x, y] of [[350, 0], [-350, 0], [0, 300], [0, -300], [300, 250], [-300, -250]]) {
+    for (const fromAnchor of Object.keys(vectors)) for (const toAnchor of Object.keys(vectors)) {
+      const source = createWhiteboardNode("rect", { id: "source", x: 0, y: 0 });
+      const target = createWhiteboardNode("rect", { id: "target", x, y });
+      const board = { nodes: [source, target] };
+      const edge = createWhiteboardNode("connector", { from: { nodeId: source.id, anchor: fromAnchor }, to: { nodeId: target.id, anchor: toAnchor } });
+      const points = connectorPoints(board, edge);
+      assert.deepEqual(points[0], endpointPosition(board, edge.from));
+      assert.deepEqual(points.at(-1), endpointPosition(board, edge.to));
+      const [sx, sy] = vectors[fromAnchor], [tx, ty] = vectors[toAnchor];
+      assert.ok((points[1].x - points[0].x) * sx + (points[1].y - points[0].y) * sy > 0);
+      assert.ok((points.at(-2).x - points.at(-1).x) * tx + (points.at(-2).y - points.at(-1).y) * ty > 0);
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i];
+        assert.ok(a.x === b.x || a.y === b.y, "segments stay orthogonal");
+        for (const node of [source, target]) {
+          const crosses = a.x === b.x
+            ? a.x > node.x && a.x < node.x + node.width && Math.max(a.y, b.y) > node.y && Math.min(a.y, b.y) < node.y + node.height
+            : a.y > node.y && a.y < node.y + node.height && Math.max(a.x, b.x) > node.x && Math.min(a.x, b.x) < node.x + node.width;
+          assert.equal(crosses, false, `${fromAnchor} to ${toAnchor} at ${x},${y}`);
+        }
+      }
+    }
+  }
 });
 
 test("duplicate keeps internal connector references editable", () => {
@@ -269,3 +301,4 @@ test("whiteboard editor is packaged through the existing plugin framework", asyn
   assert.doesNotMatch(editor, /else \{\s*const node = createNodeAt\("rect", screenToWorld\(event\.clientX/);
   assert.match(renderer, /data-quick-anchor/);
 });
+

@@ -1,4 +1,5 @@
 import {
+  connectorLabelPosition,
   connectorPath,
   documentBounds,
   endpointPosition,
@@ -146,6 +147,7 @@ function renderConnector(documentValue, node) {
     "vector-effect": "non-scaling-stroke"
   }));
   group.append(svgElement("path", {
+    class: "connector-line",
     d: connectorPath(documentValue, node),
     fill: "none",
     stroke: node.style.stroke,
@@ -158,10 +160,7 @@ function renderConnector(documentValue, node) {
     "pointer-events": "none"
   }));
   if (node.text) {
-    const from = endpointPosition(documentValue, node.from);
-    const to = endpointPosition(documentValue, node.to, from);
-    const x = (from.x + to.x) / 2;
-    const y = (from.y + to.y) / 2;
+    const { x, y } = connectorLabelPosition(documentValue, node);
     const label = svgElement("text", {
       class: "connector-label",
       x,
@@ -225,6 +224,7 @@ export function renderWhiteboardNodes(documentValue, nodeLayer, nodeIds, selecte
 }
 
 export function renderSelection(documentValue, selectedIds, selectionLayer, options = {}) {
+  const controlScale = 1 / Math.max(0.1, options.zoom || 1);
   selectionLayer.replaceChildren();
   const selected = documentValue.nodes.filter((node) => selectedIds.has(node.id) && node.type !== "connector");
   const selectedConnectors = documentValue.nodes.filter((node) => selectedIds.has(node.id) && node.type === "connector");
@@ -242,7 +242,8 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
         const bottom = Math.max(...points.map((point) => point.y));
         return { x, y, width: right - x, height: bottom - y, right, bottom };
       })();
-  const outline = svgElement("rect", {
+  if (selected.length) {
+    const outline = svgElement("rect", {
     class: "selection-outline",
     x: bounds.x - 4,
     y: bounds.y - 4,
@@ -255,7 +256,8 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
     "vector-effect": "non-scaling-stroke",
     "pointer-events": "none"
   });
-  selectionLayer.append(outline);
+    selectionLayer.append(outline);
+  }
   if (selected.length === 0 && selectedConnectors.length === 1) {
     const connector = selectedConnectors[0];
     for (const [end, point] of [
@@ -267,7 +269,7 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
         "data-connector-end": end,
         cx: point.x,
         cy: point.y,
-        r: 6,
+        r: 7 * controlScale,
         fill: "var(--board-surface)",
         stroke: "#3370ff",
         "stroke-width": 2,
@@ -298,16 +300,19 @@ export function renderSelection(documentValue, selectedIds, selectionLayer, opti
     }
     if (options.quickCreate !== false && !["image", "text"].includes(selected[0].type)) {
       for (const [anchor, x, y] of [
-        ["top", bounds.x + bounds.width / 2, bounds.y - 28],
-        ["right", bounds.right + 28, bounds.y + bounds.height / 2],
-        ["bottom", bounds.x + bounds.width / 2, bounds.bottom + 28],
-        ["left", bounds.x - 28, bounds.y + bounds.height / 2]
+        ["top", bounds.x + bounds.width / 2, bounds.y - 28 * controlScale],
+        ["right", bounds.right + 28 * controlScale, bounds.y + bounds.height / 2],
+        ["bottom", bounds.x + bounds.width / 2, bounds.bottom + 28 * controlScale],
+        ["left", bounds.x - 28 * controlScale, bounds.y + bounds.height / 2]
       ]) {
         const quick = svgElement("g", {
           class: "quick-create",
           "data-quick-anchor": anchor,
-          transform: `translate(${x} ${y})`
+          transform: `translate(${x} ${y}) scale(${controlScale})`
         });
+        const hint = svgElement("title");
+        hint.textContent = "点击新建节点；拖到已有节点连接，拖到空白处新建";
+        quick.append(hint);
         quick.append(svgElement("circle", { class: "quick-create-hit", r: 16, fill: "transparent" }));
         quick.append(svgElement("circle", { class: "quick-create-dot", r: 5, fill: "var(--board-surface)", stroke: "#3370ff", "stroke-width": 2, "vector-effect": "non-scaling-stroke" }));
         quick.append(svgElement("path", {
@@ -367,9 +372,8 @@ function exportText(node) {
 
 function exportNode(documentValue, node, offsetX, offsetY) {
   if (node.type === "connector") {
-    const from = endpointPosition(documentValue, node.from);
-    const to = endpointPosition(documentValue, node.to, from);
-    const label = node.text ? `<text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2}" text-anchor="middle" dominant-baseline="middle" fill="${escapeXml(node.style.textColor)}" font-family="system-ui, sans-serif" font-size="${node.style.fontSize}" font-weight="${node.style.fontWeight}" paint-order="stroke" stroke="#ffffff" stroke-width="6" stroke-linejoin="round">${escapeXml(node.text)}</text>` : "";
+    const position = connectorLabelPosition(documentValue, node);
+    const label = node.text ? `<text x="${position.x}" y="${position.y}" text-anchor="middle" dominant-baseline="middle" fill="${escapeXml(node.style.textColor)}" font-family="system-ui, sans-serif" font-size="${node.style.fontSize}" font-weight="${node.style.fontWeight}" paint-order="stroke" stroke="#ffffff" stroke-width="6" stroke-linejoin="round">${escapeXml(node.text)}</text>` : "";
     return `<g><path d="${escapeXml(connectorPath(documentValue, node))}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}"${node.endArrow === "none" ? "" : " marker-end=\"url(#arrow)\""}/>${label}</g>`;
   }
   if (node.type === "freehand") return `<path d="${escapeXml(freehandPath(node.points))}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -398,3 +402,4 @@ export function buildWhiteboardSvg(documentValue, padding = 40) {
   ].map((node) => exportNode(documentValue, node, x, y)).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${x} ${y} ${width} ${height}"><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#646a73"/></marker></defs><rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#ffffff"/>${nodes}</svg>`;
 }
+
