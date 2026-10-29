@@ -655,47 +655,44 @@ function ensureBranchPaths(svg, requiredCount) {
 }
 
 function alignVisibleHierarchy() {
-  const childrenGroups = Array.from(document.querySelectorAll("me-children"));
-  for (const children of childrenGroups) children.style.removeProperty("transform");
-  // Read after clearing every previous correction so repeated refreshes never
-  // accumulate offsets from an earlier layout.
+  const wrappers = Array.from(document.querySelectorAll("me-wrapper"));
+  // A translated child group still occupies its old flow box. In a large,
+  // asymmetric tree that lets a descendant spill into its sibling's branch.
+  // Keep every child group in flow; align only the parent label, bottom-up.
+  for (const children of document.querySelectorAll("me-children")) children.style.removeProperty("transform");
+  for (const wrapper of wrappers) {
+    wrapper.style.removeProperty("padding-top");
+    wrapper.style.removeProperty("padding-bottom");
+    wrapper.querySelector(":scope > me-parent")?.style.removeProperty("transform");
+  }
   void document.documentElement.offsetHeight;
 
-  const alignWrapper = (wrapper) => {
-    const parentTopic = wrapper.querySelector(":scope > me-parent > me-tpc");
+  for (const wrapper of wrappers.reverse()) {
+    if (!wrapper.getClientRects().length) continue;
+    const parent = wrapper.querySelector(":scope > me-parent");
+    const parentTopic = parent?.querySelector(":scope > me-tpc");
     const children = wrapper.querySelector(":scope > me-children");
-    if (!parentTopic || !children) return;
-    const childWrappers = Array.from(children.children).filter(
-      (child) => child instanceof HTMLElement && child.tagName === "ME-WRAPPER"
-    );
-    const childTopics = childWrappers
+    if (!parent || !parentTopic || !children || !children.getClientRects().length) continue;
+    const topics = Array.from(children.children)
+      .filter((child) => child.tagName === "ME-WRAPPER")
       .map((child) => child.querySelector(":scope > me-parent > me-tpc"))
-      .filter(Boolean);
-    if (!childTopics.length) return;
-
+      .filter((topic) => topic && topic.getClientRects().length);
+    if (!topics.length) continue;
+    const rects = topics.map((topic) => topic.getBoundingClientRect());
     const parentRect = parentTopic.getBoundingClientRect();
-    const childRects = childTopics.map((topic) => topic.getBoundingClientRect());
-    const parentCenter = parentRect.top + parentRect.height / 2;
-    const childrenCenter = (
-      Math.min(...childRects.map((rect) => rect.top)) +
-      Math.max(...childRects.map((rect) => rect.bottom))
-    ) / 2;
-    // getBoundingClientRect uses screen pixels while CSS translateY uses
-    // unscaled layout pixels. Divide by the rendered scale so a zoomed map
-    // does not retain a 1px offset and turn a straight branch into a kink.
-    const scaleY = children.offsetHeight > 0
-      ? children.getBoundingClientRect().height / children.offsetHeight
-      : 1;
-    const correction = Math.abs(parentCenter - childrenCenter) < 0.25
-      ? 0
-      : Math.round((parentCenter - childrenCenter) / (scaleY || 1) * 100) / 100;
-    if (correction) children.style.transform = `translateY(${correction}px)`;
+    const center = (Math.min(...rects.map((rect) => rect.top)) + Math.max(...rects.map((rect) => rect.bottom))) / 2;
+    const scaleY = wrapper.offsetHeight > 0 ? wrapper.getBoundingClientRect().height / wrapper.offsetHeight : 1;
+    const correction = (center - parentRect.top - parentRect.height / 2) / (scaleY || 1);
+    if (Math.abs(correction) > 0.1) parent.style.transform = `translateY(${correction}px)`;
 
-    for (const childWrapper of childWrappers) alignWrapper(childWrapper);
-  };
-
-  for (const wrapper of document.querySelectorAll("me-main > me-wrapper")) {
-    alignWrapper(wrapper);
+    // A tall parent centered on an asymmetric child can itself extend outside
+    // the flow box. Reserve that overflow in layout before aligning ancestors.
+    const box = wrapper.getBoundingClientRect();
+    const label = parentTopic.getBoundingClientRect();
+    const top = Math.max(0, (box.top - label.top) / (scaleY || 1));
+    const bottom = Math.max(0, (label.bottom - box.bottom) / (scaleY || 1));
+    if (top > 0.1) wrapper.style.paddingTop = `${Math.ceil(top)}px`;
+    if (bottom > 0.1) wrapper.style.paddingBottom = `${Math.ceil(bottom)}px`;
   }
 }
 

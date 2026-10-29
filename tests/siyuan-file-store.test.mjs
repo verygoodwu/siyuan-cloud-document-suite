@@ -616,7 +616,7 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(mindScript, /Math\.abs\(endRect\.top \+ endRect\.height \/ 2 - startRect\.top - startRect\.height \/ 2\) <= 0\.5/);
   assert.match(mindScript, /left \? cL \+ cW - gap : cL \+ gap/);
   assert.match(mindScript, /return `M \$\{parentEdge\} \$\{parentCenterY\} H \$\{childEdge\}`/);
-  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm58/);
+  assert.match(mindHtml, /mm-editor\.js\?v=__PLUGIN_VERSION__-mm59/);
   assert.match(mindScript, /mind\.isFocusMode && target\.nodeObj === mind\.nodeData/);
   assert.match(mindHtml, /me-nodes\{isolation:isolate\}/);
   assert.match(mindHtml, /me-nodes>me-main,#map me-nodes>me-root\{position:relative;z-index:10\}/);
@@ -638,9 +638,6 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.doesNotMatch(mindHtml, /body\.hierarchy-view me-children\{[^}]*top:-5px/);
   assert.match(mindScript, /function alignVisibleHierarchy\(\)/);
   assert.match(mindScript, /children\.style\.removeProperty\("transform"\)/);
-  assert.match(mindScript, /Math\.min\(\.\.\.childRects\.map\(\(rect\) => rect\.top\)\)/);
-  assert.match(mindScript, /Math\.max\(\.\.\.childRects\.map\(\(rect\) => rect\.bottom\)\)/);
-  assert.match(mindScript, /children\.style\.transform = `translateY\(\$\{correction\}px\)`/);
   assert.match(mindScript, /function redrawVisibleBranches\(\) \{\s*alignVisibleHierarchy\(\)/);
   assert.match(mindScript, /expander\.addEventListener\("pointerdown", \(\) => \{[\s\S]*pendingViewportAnchor = anchor/);
   assert.match(mindScript, /function restoreViewportAnchor\(mind, anchor\)[\s\S]*findMindTopic\(mind, anchor\.nodeId\)[\s\S]*mind\.move\(dx, dy\)/);

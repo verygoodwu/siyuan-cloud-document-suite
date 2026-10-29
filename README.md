@@ -1,6 +1,6 @@
 # Cloud Document Suite
 
-> v2.3.4 improves whiteboard text editing and connections: double-click to place the caret, Enter/F2 to edit at the end, drag quick-create handles onto existing shapes to connect, and select connectors without a rectangular selection box.
+> v2.3.5 fixes overlapping nodes in large mind maps with deeply nested, long-text branches, including alignment after folding, zooming and resizing.
 
 **English** | [简体中文](./README.zh-CN.md)
 

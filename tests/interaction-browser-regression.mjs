@@ -47,6 +47,14 @@ files.set("/data/assets/tab-siblings.mm", Buffer.from('<map version="1.0.1" CLOU
 files.set("/data/assets/imported.mm", Buffer.from('<?xml version="1.0" encoding="UTF-8"?><map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="afafaf" COLOR="#ffffff" BACKGROUND_COLOR="#3f73f1"><font BOLD="true"/><node TEXT="q" ID="branch" STYLE="bubble" POSITION="right"><node TEXT="45646546" ID="nested" STYLE="fork"><node TEXT="输入文字" ID="leaf-a" STYLE="fork"/><node TEXT="556465465" ID="leaf-b" STYLE="fork"/><node TEXT="56asf4a54fa6" ID="leaf-c" STYLE="fork"/></node></node><node TEXT="13216541" ID="middle" STYLE="bubble" POSITION="right"/><node TEXT="456465161" ID="lower-a" STYLE="bubble" POSITION="right"/><node TEXT="456465465" ID="lower-b" STYLE="bubble" POSITION="right"/></node></map>'));
 files.set("/data/assets/mixed.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="2"><node ID="root" TEXT="两侧"><node ID="l1" TEXT="左一" POSITION="left"/><node ID="l2" TEXT="左二" POSITION="left"/><node ID="r1" TEXT="右一" POSITION="right"/><node ID="r2" TEXT="右二" POSITION="right"/></node></map>'));
 files.set("/data/assets/five.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="root" TEXT="五条支路"><node ID="b1" TEXT="计划" POSITION="right"><node ID="c1" TEXT="下一步"/></node><node ID="b2" TEXT="设计" POSITION="right"><node ID="c2" TEXT="规范"/></node><node ID="b3" TEXT="开发" POSITION="right"><node ID="c3" TEXT="实现"/></node><node ID="b4" TEXT="测试" POSITION="right"><node ID="c4" TEXT="验收"/></node><node ID="b5" TEXT="发布" POSITION="right"><node ID="c5" TEXT="上线"/></node></node></map>'));
+const denseNode = (id, depth) => {
+  const text = `布局节点 ${id}：` + "长文本在展开和缩放后需要保持独立占位。".repeat(1 + id.length % 4);
+  const count = depth > 0 ? (id.length % 3 === 0 ? 1 : 3) : 0;
+  return `<node ID="dense-${id}" TEXT="${text}" FOLDED="false">` +
+    Array.from({ length: count }, (_, index) => denseNode(id + index, depth - 1)).join("") + "</node>";
+};
+files.set("/data/assets/dense-layout.mm", Buffer.from('<map CLOUD_VIEW_STYLE="hierarchy" CLOUD_DIRECTION="1"><node ID="dense-root" TEXT="长文本分支布局回归">' +
+  ["a", "long", "mixed"].map((id) => denseNode(id, 5)).join("") + '</node></map>'));
 const board = Buffer.from(JSON.stringify({ schema: "siyuan-cloud-whiteboard", version: 1, title: "Test", viewport: { x: 300, y: 200, zoom: 1 }, nodes: [] }));
 files.set("/data/assets/test.board.json", board);
 const server = createServer(async (req, res) => {
@@ -672,6 +680,23 @@ try {
     const screenshot = await command("Page.captureScreenshot", { format: "png" });
     await writeFile(process.env.MM_FIVE_SCREENSHOT_PATH, Buffer.from(screenshot.data, "base64"));
   }
+  await navigate("mm-editor", "/assets/dense-layout.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length > 100");
+  const noTopicOverlap = `(()=>{
+    const rects=[...document.querySelectorAll('me-tpc')].filter(t=>t.getClientRects().length).map(t=>t.getBoundingClientRect());
+    for(let i=0;i<rects.length;i++)for(let j=i+1;j<rects.length;j++){
+      const a=rects[i],b=rects[j];
+      if(Math.min(a.right,b.right)-Math.max(a.left,b.left)>.2 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>.2)return false;
+    }
+    return true;
+  })()`;
+  await until(noTopicOverlap);
+  await command("Emulation.setDeviceMetricsOverride", { width: 740, height: 850, deviceScaleFactor: 1, mobile: false });
+  await wait(150);
+  assert.equal(await evaluate(noTopicOverlap), true);
+  const expander="me-main > me-wrapper > me-parent > me-epd";
+  await click(expander); await wait(150); assert.equal(await evaluate(noTopicOverlap), true);
+  await click(expander); await wait(150); assert.equal(await evaluate(noTopicOverlap), true);
+  checks.push("large asymmetric long-text mind maps reserve subtree space after resize, collapse and expansion");
   await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await navigate("mm-editor", "/assets/imported.mm", "document.body.classList.contains('layout-ready') && document.querySelectorAll('me-tpc').length === 9");
   assert.equal(await evaluate("document.querySelector('#map').getBoundingClientRect().width"), 390);
