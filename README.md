@@ -1,10 +1,14 @@
 # Cloud Document Suite
 
-> v2.3.5 fixes overlapping nodes in large mind maps with deeply nested, long-text branches, including alignment after folding, zooming and resizing.
+> v2.3.6 explains how to use Cloud Document Suite with Cloud Docs Home.
 
 **English** | [简体中文](./README.zh-CN.md)
 
 ## Quick start · One minute
+
+### Use with Cloud Docs Home
+
+Enable both plugins to browse notebooks in the Cloud Docs Home sidebar. Right-click a document or notebook there and use Cloud Document Suite's **Create file** menu to make a spreadsheet, mind map, or whiteboard. Open the file to edit it in Cloud Document Suite.
 
 1. **Create**: Right-click a document or notebook in SiYuan's document tree → **创建文件 (Create file)**, then choose a spreadsheet, mind map, whiteboard, text file, or document. If the entry is missing, check the context menu's Plugins submenu.
 2. **Edit**: Select a spreadsheet cell and type; double-click to edit existing content. Double-click a mind-map node to edit its text and press **Tab** to add a child. On a whiteboard, click a shape to select it, drag to move it, double-click to type, and hold **Space** while dragging to pan. Regular documents use SiYuan's editor and can be exported to Word/PDF.
