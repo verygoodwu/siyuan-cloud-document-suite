@@ -10,7 +10,7 @@ import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
 import { Diagnostics } from "./diagnostics";
 import { DragDropController } from "./drag-drop-controller";
-import { findEditorDropTarget } from "./drop-target";
+import { findCloudDocsTreeDropTarget, findEditorDropTarget } from "./drop-target";
 import { DocumentExportMenu } from "./document-export-menu";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
@@ -1016,6 +1016,8 @@ class DropImporterPlugin extends Plugin {
       ...(event.target instanceof Element ? [event.target] : [])
     ];
     for (const candidate of candidates) {
+      const cloudDocsTarget = findCloudDocsTreeDropTarget(candidate);
+      if (cloudDocsTarget) return cloudDocsTarget;
       if (!candidate.closest(FILE_TREE_SELECTOR)) continue;
       const treeItem =
         candidate.closest<HTMLElement>(TREE_DOCUMENT_SELECTOR) ??

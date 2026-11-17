@@ -193,6 +193,23 @@ try {
   await command("Page.navigate", { url: `${base}/compatibility-host` });
   await until("typeof CloudDrop !== 'undefined'");
   assert.deepEqual(await evaluate("['ordinary','database','query','noneditable','locked','panel'].map(id=>CloudDrop.findEditorDropTarget(document.getElementById(id)))"), [{ id: "ordinary", position: "after-block" }, null, null, null, null, null]);
+  assert.deepEqual(await evaluate(`(() => {
+    const fixture = document.createElement("div");
+    fixture.innerHTML = \`
+      <div class="cdh-nav-root">
+        <button class="cdh-side-item" data-menu="box" data-box="notebook"><span id="book-label"></span></button>
+        <div class="cdh-tree-row is-folder" data-menu="doc" data-id="folder"><span id="folder-label"></span></div>
+        <div class="cdh-tree-row cdh-tree-group" data-menu="group"><span id="virtual-folder"></span></div>
+        <button class="cdh-side-item" data-act="settings" id="sidebar-settings"></button>
+      </div>
+      <div class="cdh-tree-row" data-menu="doc" data-id="unrelated" id="unrelated-row"></div>\`;
+    return ["book-label", "folder-label", "virtual-folder", "sidebar-settings", "unrelated-row"]
+      .map(id => CloudDrop.findCloudDocsTreeDropTarget(fixture.querySelector("#" + id)));
+  })()`), [
+    { id: "notebook", position: "create-root-documents" },
+    { id: "folder", position: "create-child-documents" },
+    null, null, null
+  ]);
   checks.push("drop targeting leaves database assets, readonly editors and embedded blocks to SiYuan");
   await command("Page.navigate", { url: `${base}/document-print.html?id=20261021000000-abcdefg` });
   await until("!document.querySelector('#confirm').disabled");

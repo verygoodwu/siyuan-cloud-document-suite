@@ -1,5 +1,18 @@
 import type { DropTarget } from "./types";
 
+export function findCloudDocsTreeDropTarget(element: Element): DropTarget | null {
+  const row = element.closest<HTMLElement>(
+    '.cdh-nav-root .cdh-tree-row[data-menu="doc"], .cdh-nav-root .cdh-side-item[data-menu="box"]'
+  );
+  if (!row) return null;
+  if (row.dataset.menu === "box") {
+    const id = row.dataset.box;
+    return id ? { id, position: "create-root-documents" } : null;
+  }
+  const id = row.dataset.id;
+  return id ? { id, position: "create-child-documents" } : null;
+}
+
 export function findEditorDropTarget(pointedElement: Element): DropTarget | null {
   const editor = pointedElement.closest(".protyle-wysiwyg");
   if (!editor) return null;
