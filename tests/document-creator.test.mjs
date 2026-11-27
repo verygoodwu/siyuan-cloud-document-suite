@@ -10,6 +10,48 @@ const clientSource = await readFile(new URL("../src/kernel-client.ts", import.me
 const clientCompiled = await transform(clientSource, { loader: "ts", format: "esm" });
 const { KernelClient } = await import(`data:text/javascript;base64,${Buffer.from(clientCompiled.code).toString("base64")}`);
 
+test("child import resolves name collisions and does not mark a missing asset ready", async () => {
+  const states = [];
+  const paths = [];
+  let created;
+  const creator = new DocumentCreator({
+    async postJson(endpoint, body) {
+      switch (endpoint) {
+        case "/api/filetree/getPathByID":
+          assert.equal(body.id, "folder-a");
+          return { notebook: "book-a" };
+        case "/api/filetree/getHPathByID":
+          assert.equal(body.id, "folder-a");
+          return "/资料";
+        case "/api/filetree/getIDsByHPath":
+          paths.push(body.path);
+          return paths.length === 1 ? ["existing"] : [];
+        case "/api/filetree/createDocWithMd":
+          created = body;
+          return "new-doc";
+        case "/api/attr/setBlockAttrs":
+          assert.equal(body.id, "new-doc");
+          states.push(body.attrs["custom-cloud-document-state"]);
+          return {};
+        default:
+          assert.fail(endpoint);
+      }
+    },
+    async verifyAsset(path) {
+      assert.equal(path, "assets/map.mm");
+      throw Error("asset missing");
+    }
+  });
+  await assert.rejects(creator.createChildDocuments("folder-a", [
+    { originalName: "map.mm", assetPath: "assets/map.mm", documentKind: "mindmap" }
+  ]), /asset missing/);
+  assert.deepEqual(paths, ["/资料/map.mm", "/资料/map (2).mm"]);
+  assert.equal(created.notebook, "book-a");
+  assert.equal(created.path, "/资料/map (2).mm");
+  assert.equal(created.parentID, "folder-a");
+  assert.deepEqual(states, ["initializing"]);
+});
+
 test("dropping previewable files into a content block inserts previews, not only asset links", async () => {
   const calls = [];
   const documents = new DocumentCreator({

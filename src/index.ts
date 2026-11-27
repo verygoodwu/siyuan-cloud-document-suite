@@ -1,17 +1,18 @@
-import { Plugin, showMessage, type IMenu } from "siyuan";
+import { Dialog, expandDocTree, openTab, Plugin, showMessage, type IMenu } from "siyuan";
 import * as XLSX from "xlsx";
 import * as mammoth from "mammoth";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import JSZip from "jszip";
 import { KernelClient } from "./kernel-client";
-import { buildAttachmentMarkdown, DocumentCreator } from "./document-creator";
+import { buildAttachmentMarkdown, DocumentCreator, type CreatedDocument } from "./document-creator";
 import { PreviewBuilders } from "./preview-builders";
 import { EmbedManager } from "./embed-manager";
 import { Diagnostics } from "./diagnostics";
 import { DragDropController } from "./drag-drop-controller";
 import { findCloudDocsTreeDropTarget, findEditorDropTarget } from "./drop-target";
 import { DocumentExportMenu } from "./document-export-menu";
+import { renderImportResults, type ImportResult } from "./import-results";
 import type { DocTreeMenuDetail, DocumentPathData, DropTarget, UploadedAsset } from "./types";
 import {
   buildUniqueUploadName,
@@ -151,6 +152,7 @@ class DropImporterPlugin extends Plugin {
   }
 
   public onunload(): void {
+    for (const dialog of this.importDialogs) dialog.destroy();
     this.dragController.stop();
     this.documentExports.stop();
     this.eventBus.off("open-menu-doctree", this.onOpenDocTreeMenu);
@@ -585,8 +587,11 @@ class DropImporterPlugin extends Plugin {
     const uploaded: UploadedAsset[] = [];
     const uploadFailures: string[] = [];
     const previewFailures: string[] = [];
+    const results: ImportResult[] = files.map(file => ({ name: file.name }));
+    const directoryImport = dropTarget.position !== "after-block";
 
     for (const [index, file] of files.entries()) {
+      const result = results[index];
       this.showToast(`正在导入 ${index + 1}/${files.length}：${file.name}…`);
       try {
         const asset = await this.api.uploadAsset(file);
@@ -629,6 +634,8 @@ class DropImporterPlugin extends Plugin {
         } catch (previewError) {
           console.error("[Drop Importer] Preview generation failed", previewError);
           previewFailures.push(`${file.name}：${String(previewError)}`);
+          result.warning = previewError instanceof Error ? previewError.message : String(previewError);
+          if (directoryImport) delete asset.documentKind;
           await this.recordDebug("preview-failed", {
             fileName: file.name,
             reason: String(previewError)
@@ -638,11 +645,31 @@ class DropImporterPlugin extends Plugin {
       } catch (error) {
         console.error("[Drop Importer] Asset upload failed", error);
         uploadFailures.push(`${file.name}：${String(error)}`);
+        result.error = `上传失败：${error instanceof Error ? error.message : String(error)}`;
         await this.recordDebug("import-file-failed", {
           fileName: file.name,
           reason: String(error)
         });
+        continue;
       }
+      if (directoryImport) {
+        try {
+          const asset = uploaded[uploaded.length - 1];
+          const created = dropTarget.position === "create-child-documents"
+            ? await this.documents.createChildDocuments(dropTarget.id, [asset])
+            : await this.documents.createRootDocuments(dropTarget.id, [asset]);
+          result.document = created[0];
+        } catch (error) {
+          result.warning = undefined;
+          result.error = `附件已上传，文档处理失败：${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+    }
+
+    if (directoryImport) {
+      await this.finishDirectoryImport(dropTarget, results);
+      await this.recordDebug("import-complete", { results });
+      return;
     }
 
     if (uploaded.length === 0) {
@@ -652,13 +679,7 @@ class DropImporterPlugin extends Plugin {
     }
 
     try {
-      if (dropTarget.position === "create-child-documents") {
-        await this.documents.createChildDocuments(dropTarget.id, uploaded);
-      } else if (dropTarget.position === "create-root-documents") {
-        await this.documents.createRootDocuments(dropTarget.id, uploaded);
-      } else {
-        await this.documents.insertAttachmentBlock(dropTarget, uploaded);
-      }
+      await this.documents.insertAttachmentBlock(dropTarget, uploaded);
     } catch (error) {
       console.error("[Drop Importer] Attachment insertion failed", error);
       this.showToast(`文件已上传，但预览/附件插入失败：${String(error)}`, true);
@@ -676,6 +697,72 @@ class DropImporterPlugin extends Plugin {
       failedCount > 0 || previewFailures.length > 0
     );
     await this.recordDebug("import-complete", { uploaded, failedCount, uploadFailures, previewFailures });
+  }
+
+  private readonly importDialogs = new Set<Dialog>();
+
+  private async openImportedDocument(entry: CreatedDocument): Promise<void> {
+    await openTab({ app: this.app, doc: { id: entry.id } });
+    try {
+      const useNativeTree = document.dispatchEvent(new CustomEvent("cloud-docs-home:reveal-imported-document", {
+        cancelable: true,
+        detail: entry
+      }));
+      if (useNativeTree) await expandDocTree({ id: entry.id, isSetCurrent: true });
+    } catch (error) {
+      console.warn("[Cloud Document Suite] Cannot reveal imported document", error);
+    }
+  }
+
+  private async finishDirectoryImport(target: DropTarget, results: ImportResult[]): Promise<void> {
+    const toast = document.querySelector("[data-drop-importer-toast]");
+    if (results.length === 1) {
+      const result = results[0];
+      if (!result.document) {
+        this.showToast(result.error || "文件导入失败", true);
+        return;
+      }
+      try {
+        await this.openImportedDocument(result.document);
+        if (result.warning) this.showToast(`已保留附件，预览失败：${result.warning}`, true);
+        else toast?.remove();
+        return;
+      } catch {
+        this.showToast("文件已导入，自动打开失败，可从导入结果打开", true);
+      }
+    }
+    let destination = target.position === "create-child-documents" ? "目标文件夹" : "知识库根目录";
+    try {
+      if (target.position === "create-child-documents") {
+        destination = await this.api.postJson<string>("/api/filetree/getHPathByID", { id: target.id }) || destination;
+      } else {
+        const { notebooks } = await this.api.postJson<{ notebooks: { id: string; name: string }[] }>("/api/notebook/lsNotebooks", {});
+        const notebook = notebooks.find(item => item.id === target.id);
+        if (notebook) destination = `${notebook.name} / 根目录`;
+      }
+    } catch { /* The result remains usable if the destination label cannot be loaded. */ }
+    toast?.remove();
+    const dialog = new Dialog({
+      title: "导入结果",
+      width: "min(520px, calc(100vw - 32px))",
+      content: renderImportResults(destination, results),
+      destroyCallback: () => this.importDialogs.delete(dialog)
+    });
+    this.importDialogs.add(dialog);
+    dialog.element.querySelector("[data-import-close]")?.addEventListener("click", () => dialog.destroy());
+    dialog.element.querySelectorAll<HTMLButtonElement>("[data-import-open]").forEach(button => {
+      button.addEventListener("click", async () => {
+        const entry = results[Number(button.dataset.importOpen)]?.document;
+        if (!entry) return;
+        button.disabled = true;
+        try {
+          await this.openImportedDocument(entry);
+          dialog.destroy();
+        }
+        catch { this.showToast("打开失败，请重试", true); }
+        finally { button.disabled = false; }
+      });
+    });
   }
 
   private async postJson<T>(endpoint: string, body: unknown): Promise<T> {
