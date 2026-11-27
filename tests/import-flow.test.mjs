@@ -163,9 +163,11 @@ test("a folder import selects the new document in the native tree if Cloud Docs 
 });
 
 test("closing batch results keeps all imported files without changing the open document or tree selection", async () => {
-  const { plugin, target, created, opened, revealed, nativeSelections, listeners } = harness();
+  const { plugin, target, created, opened, revealed, nativeSelections, listeners, announced } = harness();
   await plugin.importFiles([{ name: "脑图.bin" }, { name: "排期.bin" }], target);
   assert.equal(plugin.importDialogs.size, 1);
+  assert.equal(announced.length, 1);
+  assert.deepEqual(Array.from(announced[0], entry => entry.id), ["脑图.bin", "排期.bin"]);
   listeners.get("close:click")();
   assert.equal(plugin.importDialogs.size, 0);
   assert.deepEqual(created, ["脑图.bin", "排期.bin"]);

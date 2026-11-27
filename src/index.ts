@@ -664,6 +664,8 @@ class DropImporterPlugin extends Plugin {
     }
 
     if (directoryImport) {
+      const created = results.flatMap(result => result.document ? [result.document] : []);
+      if (created.length) document.dispatchEvent(new CustomEvent("cloud-docs-home:document-created", { detail: created }));
       await this.finishDirectoryImport(dropTarget, results);
       await this.recordDebug("import-complete", { results });
       return;
