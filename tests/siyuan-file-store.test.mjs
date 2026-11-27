@@ -669,7 +669,6 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(pluginSource, /promoteCreateFileMenu/);
   assert.match(pluginSource, /rootItems\.insertBefore\(createItem, replaceItem\.nextElementSibling\)/);
   assert.match(pluginSource, /separatorBeforeClose/);
-  assert.match(documentCreatorSource, /async resolveNotebookId/);
   assert.match(documentCreatorSource, /custom-cloud-document-kind/);
   assert.match(documentCreatorSource, /\/api\/attr\/setBlockAttrs/);
   assert.match(documentExportSource, /\/api\/attr\/getBlockAttrs/);
@@ -762,7 +761,6 @@ test("editor sources keep automatic save and readable borderless layouts", async
   assert.match(sheetScript, /siyuan-cloud-document-export/);
   assert.match(mindScript, /siyuan-cloud-document-export/);
   assert.match(whiteboardScript, /siyuan-cloud-document-export/);
-  assert.match(pluginSource, /this\.documents\.createRootDocuments\(notebook, \[asset\]\)/);
   assert.doesNotMatch(sheetScript, /querySelector\("#save"\)/);
   assert.match(sheetScript, /grid\.addEventListener\("paste"/);
   assert.match(sheetScript, /grid\.addEventListener\("copy"/);

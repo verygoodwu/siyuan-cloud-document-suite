@@ -28,12 +28,6 @@ export function buildAttachmentMarkdown(assets: UploadedAsset[]): string {
 export class DocumentCreator {
   constructor(private readonly api: KernelClient) {}
 
-  async resolveNotebookId(type: "doc" | "notebook", targetId: string): Promise<string> {
-    if (type === "notebook") return targetId;
-    const pathData = await this.api.postJson<DocumentPathData>("/api/filetree/getPathByID", { id: targetId });
-    return pathData.notebook;
-  }
-
   async insertAttachmentBlock(target: DropTarget, assets: UploadedAsset[]): Promise<void> {
     await this.api.postJson<unknown>("/api/block/insertBlock", {
       dataType: "markdown",
@@ -74,7 +68,7 @@ export class DocumentCreator {
       notebook,
       path: hpath,
       ...(parent ? { parentID: parent.id } : {}),
-      markdown: asset.documentMarkdown?.trim() ? asset.documentMarkdown : buildAttachmentMarkdown([asset])
+      markdown: asset.documentMarkdown?.trim() ? asset.documentMarkdown : asset.assetPath ? buildAttachmentMarkdown([asset]) : ""
     });
     const created = {
       id: documentId,
@@ -85,8 +79,12 @@ export class DocumentCreator {
       kind: asset.documentKind
     };
     if (!asset.documentKind) return created;
+    if (!asset.assetPath) {
+      await this.tagDocument(documentId, asset.documentKind);
+      return created;
+    }
     await this.tagDocument(documentId, asset.documentKind, asset.assetPath, asset.originalName, "initializing", true);
-    if (asset.assetPath) await this.api.verifyAsset(asset.assetPath);
+    await this.api.verifyAsset(asset.assetPath);
     // Phase 2: only a document whose backing asset still exists becomes ready.
     await this.tagDocument(documentId, asset.documentKind, asset.assetPath, asset.originalName, "ready", true);
     return created;

@@ -261,6 +261,14 @@ class DropImporterPlugin extends Plugin {
     this.scheduleCreateFileMenuPromotion();
   };
 
+  private async createMenuDocument(type: "doc" | "notebook", targetId: string, asset: UploadedAsset): Promise<CreatedDocument> {
+    const [created] = type === "doc"
+      ? await this.documents.createChildDocuments(targetId, [asset])
+      : await this.documents.createRootDocuments(targetId, [asset]);
+    document.dispatchEvent(new CustomEvent("cloud-docs-home:document-created", { detail: created }));
+    return created;
+  }
+
   private async createNewWhiteboard(
     type: "doc" | "notebook",
     targetId: string
@@ -287,8 +295,7 @@ class DropImporterPlugin extends Plugin {
       asset.originalName = "新建白板";
       asset.documentKind = "whiteboard";
       asset.documentMarkdown = this.previews.buildWhiteboard(asset);
-      const notebook = await this.documents.resolveNotebookId(type, targetId);
-      await this.documents.createRootDocuments(notebook, [asset]);
+      await this.createMenuDocument(type, targetId, asset);
       this.showToast("白板已创建");
       await this.recordDebug("whiteboard-created", { type, targetId, asset });
     } catch (error) {
@@ -360,8 +367,7 @@ class DropImporterPlugin extends Plugin {
       asset.originalName = "新建脑图.mm";
       asset.documentKind = "mindmap";
       asset.documentMarkdown = this.previews.buildFreeMind(asset, xml);
-      const notebook = await this.documents.resolveNotebookId(type, targetId);
-      await this.documents.createRootDocuments(notebook, [asset]);
+      await this.createMenuDocument(type, targetId, asset);
       this.showToast("脑图已创建");
       await this.recordDebug("mindmap-created", { type, targetId, asset });
     } catch (error) {
@@ -381,20 +387,13 @@ class DropImporterPlugin extends Plugin {
   ): Promise<void> {
     this.showToast("正在创建 Word 文档…");
     try {
-      const notebook = await this.documents.resolveNotebookId(type, targetId);
-      const path = await this.documents.findAvailableChildPath(
-        notebook,
-        "/",
-        "新建文档"
-      );
-      const documentId = await this.postJson<string>("/api/filetree/createDocWithMd", {
-        notebook,
-        path,
-        markdown: ""
+      const { hpath } = await this.createMenuDocument(type, targetId, {
+        originalName: "新建文档",
+        assetPath: "",
+        documentKind: "document"
       });
-      await this.documents.tagDocument(documentId, "document");
       this.showToast("文档已创建，可通过思源“导出”菜单导出 Word/PDF");
-      await this.recordDebug("word-document-created", { type, targetId, path });
+      await this.recordDebug("word-document-created", { type, targetId, path: hpath });
     } catch (error) {
       console.error("[Drop Importer] Cannot create Word document", error);
       this.showToast("Word 文档创建失败，请查看诊断信息", true);
@@ -430,8 +429,7 @@ class DropImporterPlugin extends Plugin {
       asset.originalName = "新建 Excel 工作簿.xlsx";
       asset.documentKind = "spreadsheet";
       asset.documentMarkdown = this.previews.buildSpreadsheet(asset);
-      const notebook = await this.documents.resolveNotebookId(type, targetId);
-      await this.documents.createRootDocuments(notebook, [asset]);
+      await this.createMenuDocument(type, targetId, asset);
       this.showToast("Excel 工作簿已创建");
       await this.recordDebug("spreadsheet-created", { type, targetId, asset });
     } catch (error) {
@@ -465,8 +463,7 @@ class DropImporterPlugin extends Plugin {
       asset.originalName = fileName;
       asset.documentKind = "text";
       asset.documentMarkdown = this.previews.buildText(asset);
-      const notebook = await this.documents.resolveNotebookId(type, targetId);
-      await this.documents.createRootDocuments(notebook, [asset]);
+      await this.createMenuDocument(type, targetId, asset);
       this.showToast(`${isHtml ? "HTML" : "文本"}文件已创建`);
       await this.recordDebug("text-file-created", { type, targetId, format, asset });
     } catch (error) {
@@ -763,10 +760,6 @@ class DropImporterPlugin extends Plugin {
         finally { button.disabled = false; }
       });
     });
-  }
-
-  private async postJson<T>(endpoint: string, body: unknown): Promise<T> {
-    return this.api.postJson<T>(endpoint, body);
   }
 
   private refreshCloudDocumentEmbeds(): void {
